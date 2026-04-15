@@ -1,0 +1,67 @@
+# Recommended .dockerignore for .NET Docker builds
+# Ignore build outputs and local files not needed in the Docker build context
+
+# Build outputs
+bin/
+obj/
+out/
+publish/
+
+# IDEs and editors
+.vscode/
+.vs/
+.idea/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# NuGet / packages
+*.nupkg
+*.snupkg
+*.symbols.nupkg
+.packages/
+.nuget/
+
+# Logs and temporary files
+*.log
+logs/
+temp/
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets and local settings (exclude local dev secrets)
+appsettings.Development.json
+appsettings.*.local.json
+secrets.json
+.env
+.env.*
+
+# Node artifacts (if present in repo)
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+pnpm-lock.yaml
+
+# Test results and coverage
+TestResults/
+coverage/
+*.coverage
+coverage*.json
+
+# Docker-local overrides not needed in build context
+docker-compose.override.yml
+
+# VCS metadata
+.git/
+
+# Keep Dockerfile and .dockerignore themselves in context
+!Dockerfile
+!.dockerignore
+
