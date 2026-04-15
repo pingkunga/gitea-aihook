@@ -1,0 +1,26 @@
+version: "3.8"
+services:
+  summarizer:
+    build: ./GiteaAiSummarizer
+    ports:
+      - "8080:8080"
+    environment:
+      - Gitea__Url=${Gitea__Url:-https://gitea.example.com}
+      - Gitea__AccessToken=${Gitea__AccessToken}
+      - Gitea__WebhookSecret=${Gitea__WebhookSecret}
+      - Gitea__CfClientId=${Gitea__CfClientId:-}
+      - Gitea__CfClientSecret=${Gitea__CfClientSecret:-}
+      - AI__ENGINE_TYPE=${AI__ENGINE_TYPE:-Azure}
+      - AI__ENDPOINT=${AI__ENDPOINT}
+      - AI__MODEL_NAME=${AI__MODEL_NAME}
+      - AI__API_KEY=${AI__API_KEY}
+      - AdminToken=${AdminToken}
+      - MaxDiffSizeKb=${MaxDiffSizeKb:-50}
+      - Serilog__MinimumLevel__Default=${Serilog__MinimumLevel__Default:-Information}
+      - Logging__LogLevel__Default=${Logging__LogLevel__Default:-Information}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
