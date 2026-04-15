@@ -236,6 +236,3 @@ docker run -p 8080:8080 --env-file .env gitea-ai-summarizer
 - **Container:** Docker (multi-stage, `aspnet:10.0`)
 
 dotnet run --project GiteaAiSummarizer/GiteaAiSummarizer.csproj --urls "http://localhost:5000"
-
-
-pingkunga - AIzaSyAO9naJl1i6TTKCzjDxB7waqWdkkYoB8Gs
