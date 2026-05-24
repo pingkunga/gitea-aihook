@@ -183,6 +183,7 @@ app.MapPost(
         string repo,
         int prNumber,
         HttpContext ctx,
+        GiteaApiClient gitea,
         SummaryService summary,
         IConfiguration config,
         ILogger<Program> logger
@@ -204,6 +205,17 @@ app.MapPost(
         if (!string.Equals(token, adminToken, StringComparison.Ordinal))
             return Results.Unauthorized();
 
+        PullRequest realPr;
+        try
+        {
+            realPr = await gitea.GetPullRequestAsync(owner, repo, prNumber, ctx.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Manual trigger failed to resolve PR {Owner}/{Repo}#{PR}", owner, repo, prNumber);
+            return Results.BadRequest(new { error = "cannot resolve pull request" });
+        }
+
         var fakePayload = new GiteaPayload
         {
             Action = "opened",
@@ -211,9 +223,11 @@ app.MapPost(
             PullRequest = new()
             {
                 Number = prNumber,
-                Title = $"Manual trigger for PR #{prNumber}",
-                Base = new() { Ref = "main" },
-                Head = new() { Ref = "unknown" }
+                Title = realPr.Title,
+                Body = realPr.Body,
+                HtmlUrl = realPr.HtmlUrl,
+                Base = new() { Ref = realPr.Base.Ref },
+                Head = new() { Ref = realPr.Head.Ref, Sha = realPr.Head.Sha }
             },
             Repository = new() { FullName = $"{owner}/{repo}" }
         };

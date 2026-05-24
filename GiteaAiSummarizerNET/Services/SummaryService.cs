@@ -11,20 +11,24 @@ public class SummaryService(
     GiteaApiClient gitea,
     IChatClient chatClient,
     DiffProcessor diffProcessor,
+    IConfiguration config,
     ILogger<SummaryService> logger
 )
 {
+    private const string SummaryCommentMarker = "<!-- gitea-ai-summarizer:pr-summary -->";
     private readonly string _templatePath = Path.Combine(
         AppContext.BaseDirectory,
         "Templates",
         "default-prompt.txt"
     );
+    private readonly string _statusContext = config["Gitea:StatusContext"] ?? "ai/pr-summary";
 
     public async Task ProcessAsync(GiteaPayload payload, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
         var repo = payload.Repository.FullName;
         var pr = payload.PullRequest;
+        string? commitSha = null;
 
         var parts = repo.Split('/', 2);
         if (parts.Length != 2)
@@ -42,6 +46,28 @@ public class SummaryService(
 
         try
         {
+            if (string.IsNullOrWhiteSpace(pr.Head.Sha))
+            {
+                pr = await gitea.GetPullRequestAsync(owner, repoName, pr.Number, ct);
+            }
+
+            commitSha = pr.Head.Sha;
+            if (string.IsNullOrWhiteSpace(commitSha))
+            {
+                throw new InvalidOperationException("Cannot resolve PR head SHA for commit status updates.");
+            }
+
+            await gitea.CreateCommitStatusAsync(
+                owner,
+                repoName,
+                commitSha,
+                _statusContext,
+                "pending",
+                "AI summary in progress",
+                pr.HtmlUrl,
+                ct
+            );
+
             var diff = await gitea.GetDiffAsync(owner, repoName, pr.Number, ct);
             var strategy = diffProcessor.DetermineStrategy(diff);
 
@@ -60,7 +86,18 @@ public class SummaryService(
 
             sw.Stop();
             var comment = FormatComment(aiSummary, sw.Elapsed, "Microsoft Agent");
-            await gitea.PostCommentAsync(owner, repoName, pr.Number, comment, ct);
+            await UpsertSummaryCommentAsync(owner, repoName, pr.Number, comment, ct);
+
+            await gitea.CreateCommitStatusAsync(
+                owner,
+                repoName,
+                commitSha,
+                _statusContext,
+                "success",
+                "AI summary posted",
+                pr.HtmlUrl,
+                ct
+            );
 
             logger.LogInformation(
                 "Comment posted to {Repo}#{PR} in {Elapsed:0.0}s",
@@ -71,8 +108,54 @@ public class SummaryService(
         }
         catch (Exception ex)
         {
+            if (!string.IsNullOrWhiteSpace(commitSha))
+            {
+                try
+                {
+                    await gitea.CreateCommitStatusAsync(
+                        owner,
+                        repoName,
+                        commitSha,
+                        _statusContext,
+                        "failure",
+                        "AI summary failed",
+                        pr.HtmlUrl,
+                        ct
+                    );
+                }
+                catch (Exception statusEx)
+                {
+                    logger.LogError(
+                        statusEx,
+                        "Failed to update commit status for PR #{Number} in {Repo}",
+                        pr.Number,
+                        repo
+                    );
+                }
+            }
+
             logger.LogError(ex, "Failed to process PR #{Number} in {Repo}", pr.Number, repo);
         }
+    }
+
+    private async Task UpsertSummaryCommentAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        string comment,
+        CancellationToken ct
+    )
+    {
+        var comments = await gitea.GetIssueCommentsAsync(owner, repo, prNumber, ct);
+        var existing = comments.LastOrDefault(x => x.Body.Contains(SummaryCommentMarker));
+
+        if (existing is null)
+        {
+            await gitea.PostCommentAsync(owner, repo, prNumber, comment, ct);
+            return;
+        }
+
+        await gitea.UpdateIssueCommentAsync(owner, repo, existing.Id, comment, ct);
     }
 
     private async Task<string> SummarizeFullDiffAsync(
@@ -159,6 +242,8 @@ public class SummaryService(
 
     private static string FormatComment(string summary, TimeSpan elapsed, string provider) =>
         $"""
+        {SummaryCommentMarker}
+
         🤖 **AI Summary** (powered by {provider})
 
         {summary}

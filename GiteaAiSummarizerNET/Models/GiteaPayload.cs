@@ -103,3 +103,30 @@ public class GiteaCommentRequest
     [JsonPropertyName("body")]
     public string Body { get; set; } = string.Empty;
 }
+
+public class GiteaIssueComment
+{
+    [JsonPropertyName("id")]
+    public long Id { get; set; }
+
+    [JsonPropertyName("body")]
+    public string Body { get; set; } = string.Empty;
+
+    [JsonPropertyName("user")]
+    public GiteaUser? User { get; set; }
+}
+
+public class GiteaCommitStatusRequest
+{
+    [JsonPropertyName("state")]
+    public string State { get; set; } = string.Empty;
+
+    [JsonPropertyName("context")]
+    public string Context { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    [JsonPropertyName("target_url")]
+    public string? TargetUrl { get; set; }
+}

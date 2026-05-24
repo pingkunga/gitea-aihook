@@ -84,6 +84,7 @@ MIT License - Feel free to use and contribute!
 | `Gitea__Url` | Yes | — | URL of your Gitea instance |
 | `Gitea__AccessToken` | Yes | — | Personal Access Token of the bot user |
 | `Gitea__WebhookSecret` | Yes | — | Secret for verifying webhook HMAC-SHA256 signatures |
+| `Gitea__StatusContext` | No | `ai/pr-summary` | Commit status context used as merge gate in protected branches |
 | `AI__ENGINE_TYPE` | No | `Azure` | Selected provider: `Azure`, `OpenAI`, `Gemini`, `Ollama`, `Anthropic` |
 | `AI__ENDPOINT` | Yes (Azure/Ollama) | — | API Endpoint URL |
 | `AI__MODEL_NAME` | Yes | — | Model name (e.g., `gpt-4o`, `gemini-1.5-flash`) |
@@ -111,7 +112,7 @@ POST /api/v1/webhook/gitea
 X-Gitea-Signature: <HMAC-SHA256>
 ```
 
-Supports PR actions: `opened`, `synchronized`, `reopened`.
+Supports PR actions: `opened`, `synchronized`, `reopened`, `edited`.
 
 ### Health Check
 
@@ -141,7 +142,7 @@ Used when a webhook is missed or a re-summary is required.
 
 ## Gitea Setup
 
-1. Create a Bot User on Gitea (e.g., `ai-reviewer`) and generate a Personal Access Token with permissions: `repository (read)` and `issue (read/write)`.
+1. Create a Bot User on Gitea (e.g., `ai-reviewer`) and generate a Personal Access Token with permissions to read repositories, write issue comments, and write commit statuses.
 2. Add the bot user as a collaborator to your repository.
 3. Navigate to **Repository → Settings → Webhooks → Add Webhook → Gitea**.
 4. Configure the following:
@@ -150,6 +151,7 @@ Used when a webhook is missed or a re-summary is required.
    - **Content Type:** `application/json`
    - **Secret:** Must match your `Gitea__WebhookSecret`
    - **Trigger:** Select `Pull Request`
+5. Configure protected branch rules (for example `main`) and require status check context `ai/pr-summary` (or your configured `Gitea__StatusContext`) before merge.
 
 ---
 
@@ -222,6 +224,12 @@ dotnet publish -c Release
 
 ```bash
 docker build -t gitea-ai-summarizer ./GiteaAiSummarizer
+
+cd GiteaAiSummarizerNET
+docker build -t pingkunga/gitea-ai-summarizer:0.0.2 .
+docker tag pingkunga/gitea-ai-summarizer:0.0.2 pingkunga/gitea_aihook:0.0.2
+docker push pingkunga/gitea_aihook:0.0.2
+
 docker run -p 8080:8080 --env-file .env gitea-ai-summarizer
 ```
 
