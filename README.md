@@ -8,6 +8,29 @@ An automated PR summarization service that listens to Gitea Webhook events, anal
 
 The system receives a Webhook from Gitea when a PR is opened or updated, fetches the diff content, processes it through an AI engine with a pre-defined prompt template, and leaves an insightful summary for reviewers.
 
+### 🔄 System Flow
+
+```mermaid
+sequenceDiagram
+    participant G as Gitea
+    participant B as Backend (.NET 10)
+    participant AI as AI Provider (Azure/Gemini)
+
+    G->>B: Webhook: PR Opened/Sync (HMAC Signed)
+    Note over B: Verify Signature
+    B-->>G: 202 Accepted (Async Start)
+
+    rect rgb(240, 240, 240)
+    Note right of B: Background Process
+    B->>G: Set Commit Status: PENDING
+    B->>G: Fetch PR Diff & Latest Commit
+    B->>AI: Send Diff + Metadata (Scriban Prompt)
+    AI-->>B: Return Summary & Commit Suggestion
+    B->>G: Upsert PR Comment (using Hidden Marker)
+    B->>G: Set Commit Status: SUCCESS
+    end
+```
+
 ### Key Features
 - **Multi-LLM Support:** Azure AI Foundry, OpenAI, Gemini, Ollama, and Anthropic.
 - **Diff Management:** 3-tier strategy (Full / Chunked / File-level) to handle large changes within token limits.
