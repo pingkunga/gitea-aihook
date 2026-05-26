@@ -249,9 +249,9 @@ dotnet publish -c Release
 docker build -t gitea-ai-summarizer ./GiteaAiSummarizer
 
 cd GiteaAiSummarizerNET
-docker build -t pingkunga/gitea-ai-summarizer:0.0.2 .
-docker tag pingkunga/gitea-ai-summarizer:0.0.2 pingkunga/gitea_aihook:0.0.2
-docker push pingkunga/gitea_aihook:0.0.2
+docker build -t pingkunga/gitea-ai-summarizer:0.1.0 .
+docker tag pingkunga/gitea-ai-summarizer:0.1.0 pingkunga/gitea_aihook:0.1.0
+docker push pingkunga/gitea_aihook:0.1.0
 
 docker run -p 8080:8080 --env-file .env gitea-ai-summarizer
 ```
