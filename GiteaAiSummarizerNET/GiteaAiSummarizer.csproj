@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- For Agent Skill -->
+    <NoWarn>$(NoWarn);MAAI001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,16 +14,16 @@
     <PackageReference Include="Microsoft.Agents.Core" Version="1.4.83" />
     <PackageReference Include="Microsoft.Agents.Hosting.AspNetCore" Version="1.4.83" /> -->
     <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
-    <PackageReference Include="Azure.AI.Projects" Version="2.0.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.4.1" />
+    <PackageReference Include="Azure.AI.Projects" Version="2.0.1" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
     <PackageReference Include="OpenAI" Version="2.10.0" />
-    <PackageReference Include="Scriban" Version="7.1.0" />
-    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
+    <PackageReference Include="Scriban" Version="7.2.1" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.4.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <!-- <PackageReference Include="Anthropic.SDK" Version="4.7.1" /> -->
-    <PackageReference Include="Microsoft.Agents.AI.Hosting" Version="1.1.0-preview.260410.1" />
-    <PackageReference Include="Google_GenerativeAI.Microsoft" Version="3.6.4" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting" Version="1.6.2-preview.260521.1" />
+    <PackageReference Include="Google_GenerativeAI.Microsoft" Version="3.6.6" />
     <PackageReference Include="OllamaSharp" Version="5.4.25" />
     <!-- <PackageReference Include="Microsoft.Agents.AI" Version="1.1.0" /> -->
   </ItemGroup>

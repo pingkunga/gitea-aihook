@@ -39,16 +39,25 @@ builder.AddAIAgent(
     (sp, key) =>
     {
         var chatClient = sp.GetRequiredService<IChatClient>();
+        var giteaSkill = sp.GetRequiredService<GiteaSkill>();
+
+        // Discover file-based skills from the 'Templates/Skills' directory
+        var skillsProvider = new AgentSkillsProviderBuilder()
+            .UseFileSkill(Path.Combine(AppContext.BaseDirectory, "Templates", "Skills"))
+            .UseSkill(giteaSkill)
+            .UseFileScriptRunner(SubprocessScriptRunner.RunAsync)            // runner for file scripts
+            .Build();
 
         return new ChatClientAgent(
             chatClient,
-            name: key,
-            instructions: """
-            You are a helpful assistant for summarizing pull request diffs in Gitea. Given a diff, you will produce a concise summary of the changes, including what was changed and why if possible. Focus on the intent and impact of the changes rather than just listing them. Use the following format for your summary:
-            """
-        // tools: [
-        //     .. tools.Cast<AITool>()
-        // ]
+            new ChatClientAgentOptions
+            {
+                Name = key,
+                ChatOptions = new() { 
+                    Instructions = "You are a specialized Gitea PR Summarizer. Use your skills (Reviewer, Security, Style, GiteaTools) to analyze diffs and provide high-quality summaries.", 
+                },
+                AIContextProviders = [skillsProvider]
+            }
         );
     }
 );
@@ -86,6 +95,7 @@ builder.Services.AddHttpClient<GiteaApiClient>(
             client.DefaultRequestHeaders.Add("CF-Access-Client-Secret", cfSecret);
     }
 );
+builder.Services.AddSingleton<GiteaSkill>();
 builder.Services.AddSingleton<DiffProcessor>();
 builder.Services.AddScoped<SummaryService>();
 
@@ -110,7 +120,7 @@ app.MapPost(
     async (
         HttpContext ctx,
         WebhookVerifier verifier,
-        SummaryService summary,
+        IServiceScopeFactory scopeFactory,
         ILogger<Program> logger
     ) =>
     {
@@ -160,6 +170,8 @@ app.MapPost(
         // Gitea will see "202 Accepted" and close the connection successfully
         _ = Task.Run(async () =>
         {
+            using var scope = scopeFactory.CreateScope();
+            var summary = scope.ServiceProvider.GetRequiredService<SummaryService>();
             try
             {
                 logger.LogInformation("Processing PR #{Number} in background...", payload.Number);
@@ -184,7 +196,7 @@ app.MapPost(
         int prNumber,
         HttpContext ctx,
         GiteaApiClient gitea,
-        SummaryService summary,
+        IServiceScopeFactory scopeFactory,
         IConfiguration config,
         ILogger<Program> logger
     ) =>
@@ -233,7 +245,12 @@ app.MapPost(
         };
 
         logger.LogInformation("Manual trigger: {Owner}/{Repo}#{PR}", owner, repo, prNumber);
-        _ = Task.Run(() => summary.ProcessAsync(fakePayload));
+        _ = Task.Run(async () =>
+        {
+            using var scope = scopeFactory.CreateScope();
+            var summary = scope.ServiceProvider.GetRequiredService<SummaryService>();
+            await summary.ProcessAsync(fakePayload);
+        });
 
         return Results.Accepted(null, new { status = "queued", pr = prNumber });
     }
