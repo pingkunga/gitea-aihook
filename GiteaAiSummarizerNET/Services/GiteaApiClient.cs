@@ -7,33 +7,18 @@ namespace GiteaAiSummarizer.Services;
 
 public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<GiteaApiClient> logger)
 {
-    private readonly string _baseUrl = config["Gitea:Url"]?.TrimEnd('/') ?? string.Empty;
+    public string BaseUrl { get; } = config["Gitea:Url"]?.TrimEnd('/') ?? string.Empty;
+    public HttpClient HttpClient { get; } = http;
     private readonly string _webHookToken = config["Gitea:WebhookToken"] ?? string.Empty;
     private readonly string _accessToken = config["Gitea:AccessToken"] ?? string.Empty;
-    private readonly string _cfId = config["Gitea:CfClientId"] ?? string.Empty;
-    private readonly string _cfSecret = config["Gitea:CfClientSecret"] ?? string.Empty;
 
-    private void AddHeaders(HttpRequestMessage request)
+    public void AddHeaders(HttpRequestMessage request)
     {
         // Gitea standard auth
         request.Headers.Authorization = new AuthenticationHeaderValue("token", _accessToken);
         
         // Ensure we request JSON content
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-        // Required headers for Cloudflare Access (Service Token)
-        if (!string.IsNullOrEmpty(_cfId))
-        {
-            request.Headers.Remove("CF-Access-Client-Id");
-            request.Headers.Add("CF-Access-Client-Id", _cfId);
-            logger.LogDebug("Added CF-Access-Client-Id header");
-        }
-        if (!string.IsNullOrEmpty(_cfSecret))
-        {
-            request.Headers.Remove("CF-Access-Client-Secret");
-            request.Headers.Add("CF-Access-Client-Secret", _cfSecret);
-            logger.LogDebug("Added CF-Access-Client-Secret header");
-        }
     }
 
     public async Task<string> GetDiffAsync(
@@ -44,7 +29,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
     )
     {
         // For Gitea, the public .diff URL is usually /{owner}/{repo}/pulls/{number}.diff
-        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/pulls/{prNumber}.diff";
+        var url = $"{BaseUrl}/api/v1/repos/{owner}/{repo}/pulls/{prNumber}.diff";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         AddHeaders(request);
 
@@ -78,7 +63,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         CancellationToken ct = default
     )
     {
-        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/pulls/{prNumber}";
+        var url = $"{BaseUrl}/api/v1/repos/{owner}/{repo}/pulls/{prNumber}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         AddHeaders(request);
 
@@ -109,7 +94,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         CancellationToken ct = default
     )
     {
-        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/statuses/{sha}";
+        var url = $"{BaseUrl}/api/v1/repos/{owner}/{repo}/statuses/{sha}";
         var payload = new GiteaCommitStatusRequest
         {
             Context = context,
@@ -153,7 +138,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         CancellationToken ct = default
     )
     {
-        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/issues/{prNumber}/comments";
+        var url = $"{BaseUrl}/api/v1/repos/{owner}/{repo}/issues/{prNumber}/comments";
         var payload = new GiteaCommentRequest { Body = body };
         var json = JsonSerializer.Serialize(payload);
 
@@ -184,7 +169,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         CancellationToken ct = default
     )
     {
-        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/issues/{issueNumber}/comments";
+        var url = $"{BaseUrl}/api/v1/repos/{owner}/{repo}/issues/{issueNumber}/comments";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         AddHeaders(request);
 
@@ -228,7 +213,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         CancellationToken ct = default
     )
     {
-        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/issues/comments/{commentId}";
+        var url = $"{BaseUrl}/api/v1/repos/{owner}/{repo}/issues/comments/{commentId}";
         var payload = new GiteaCommentRequest { Body = body };
         var json = JsonSerializer.Serialize(payload);
 
@@ -254,7 +239,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
     {
         try
         {
-            var url = $"{_baseUrl}/api/v1/version";
+            var url = $"{BaseUrl}/api/v1/version";
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             AddHeaders(request);
             var response = await http.SendAsync(request, ct);
@@ -262,7 +247,7 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Connection check failed for Gitea at {Url}", _baseUrl);
+            logger.LogError(ex, "Connection check failed for Gitea at {Url}", BaseUrl);
             return false;
         }
     }
