@@ -4,12 +4,13 @@ using GiteaAiSummarizer.Models;
 using Scriban;
 using Microsoft.Extensions.AI;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GiteaAiSummarizer.Services;
 
 public class SummaryService(
     GiteaApiClient gitea,
-    IChatClient chatClient,
+    IServiceProvider serviceProvider,
     DiffProcessor diffProcessor,
     IConfiguration config,
     ILogger<SummaryService> logger
@@ -164,9 +165,10 @@ public class SummaryService(
         CancellationToken ct
     )
     {
+        var agent = serviceProvider.GetRequiredKeyedService<AIAgent>("GiteaSummarizerAgent");
         var prompt = await BuildPromptAsync(pr, diffContent);
-        var response = await chatClient.GetResponseAsync(prompt, cancellationToken: ct);
-        return response.Messages?.FirstOrDefault()?.Text ?? "No summary found.";
+        var response = await agent.RunAsync([new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct);
+        return response?.Text ?? "No summary found.";
     }
 
     private async Task<string> SummarizeChunkedAsync(
@@ -175,6 +177,7 @@ public class SummaryService(
         CancellationToken ct
     )
     {
+        var agent = serviceProvider.GetRequiredKeyedService<AIAgent>("GiteaSummarizerAgent");
         var chunks = diffProcessor.SplitByFile(diff);
         var partialSummaries = new StringBuilder();
 
@@ -186,14 +189,13 @@ public class SummaryService(
                 $"Focus only on the file: {chunk.FileName}. Provide a brief summary of changes."
             );
 
-            var partialResponse = await chatClient.GetResponseAsync(
-                chunkPrompt,
+            var partial = await agent.RunAsync(
+                [new ChatMessage(ChatRole.User, chunkPrompt)],
                 cancellationToken: ct
             );
-            var partial = partialResponse.Messages?.FirstOrDefault()?.Text ?? string.Empty;
 
             partialSummaries.AppendLine($"### `{chunk.FileName}`");
-            partialSummaries.AppendLine(partial);
+            partialSummaries.AppendLine(partial?.Text ?? string.Empty);
             partialSummaries.AppendLine();
             logger.LogInformation("Summarized chunk for file: {FileName}", chunk.FileName);
         }
@@ -204,11 +206,11 @@ public class SummaryService(
             "Consolidate the above per-file summaries into a cohesive PR summary with all required sections."
         );
 
-        var finalResponse = await chatClient.GetResponseAsync(
-            consolidationPrompt,
+        var finalResponse = await agent.RunAsync(
+            [new ChatMessage(ChatRole.User, consolidationPrompt)],
             cancellationToken: ct
         );
-        return finalResponse.Messages?.FirstOrDefault()?.Text ?? "No summary found.";
+        return finalResponse?.Text ?? "No summary found.";
     }
 
     private async Task<string> BuildPromptAsync(
