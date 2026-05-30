@@ -167,7 +167,11 @@ public class SummaryService(
     {
         var agent = serviceProvider.GetRequiredKeyedService<AIAgent>("GiteaSummarizerAgent");
         var prompt = await BuildPromptAsync(pr, diffContent);
+        
+        logger.LogInformation("LLM is processing full diff summary for PR #{Number}...", pr.Number);
         var response = await agent.RunAsync([new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct);
+        logger.LogInformation("LLM processing completed for PR #{Number}.", pr.Number);
+        
         return response?.Text ?? "No summary found.";
     }
 

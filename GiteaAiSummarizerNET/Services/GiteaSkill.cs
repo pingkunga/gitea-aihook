@@ -1,16 +1,19 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.Logging;
 
 namespace GiteaAiSummarizer.Services;
 
 public sealed class GiteaSkill : AgentClassSkill<GiteaSkill>
 {
     private readonly GiteaApiClient _gitea;
+    private readonly ILogger<GiteaSkill> _logger;
 
-    public GiteaSkill(GiteaApiClient gitea)
+    public GiteaSkill(GiteaApiClient gitea, ILogger<GiteaSkill> logger)
     {
         _gitea = gitea;
+        _logger = logger;
     }
 
     public override AgentSkillFrontmatter Frontmatter { get; } = new(
@@ -31,6 +34,7 @@ public sealed class GiteaSkill : AgentClassSkill<GiteaSkill>
         [Description("The issue or pull request number.")] int number,
         CancellationToken ct = default)
     {
+        _logger.LogInformation("Skill Call: Fetching issue details for {Owner}/{Repo}#{Number}", owner, repo, number);
         // Gitea API treats PRs and Issues similarly for metadata
         var url = $"{_gitea.BaseUrl}/api/v1/repos/{owner}/{repo}/issues/{number}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -51,6 +55,7 @@ public sealed class GiteaSkill : AgentClassSkill<GiteaSkill>
         [Description("The issue or pull request number.")] int number,
         CancellationToken ct = default)
     {
+        _logger.LogInformation("Skill Call: Fetching comments for {Owner}/{Repo}#{Number}", owner, repo, number);
         var comments = await _gitea.GetIssueCommentsAsync(owner, repo, number, ct);
         return JsonSerializer.Serialize(comments);
     }

@@ -7,6 +7,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Executes file-based skill scripts as local subprocesses.
@@ -56,10 +58,22 @@ internal static class SubprocessScriptRunner
         {
             startInfo.FileName = interpreter;
             startInfo.ArgumentList.Add(script.FullPath);
+            
+            var logger = serviceProvider?.GetService<ILoggerFactory>()?.CreateLogger(nameof(SubprocessScriptRunner));
+            logger?.LogInformation(
+                "Skill Execution: Running file-based skill '{SkillName}' using {Interpreter}...",
+                script.Name,
+                interpreter
+            );
         }
         else
         {
             startInfo.FileName = script.FullPath;
+            var logger = serviceProvider?.GetService<ILoggerFactory>()?.CreateLogger(nameof(SubprocessScriptRunner));
+            logger?.LogInformation(
+                "Skill Execution: Running file-based skill '{SkillName}' directly...",
+                script.Name
+            );
         }
 
         if (arguments is { ValueKind: JsonValueKind.Array } json)
@@ -69,9 +83,13 @@ internal static class SubprocessScriptRunner
             {
                 if (element.ValueKind != JsonValueKind.String)
                 {
+                    var logger = serviceProvider?.GetService<ILoggerFactory>()?.CreateLogger(nameof(SubprocessScriptRunner));
+                    logger?.LogError(
+                        "File-based skill scripts only accept string CLI arguments but received a JSON element of kind '{ValueKind}'. All array elements must be JSON strings.",
+                        element.ValueKind
+                    );
                     throw new InvalidOperationException(
-                        $"File-based skill scripts only accept string CLI arguments but received a JSON element of kind '{element.ValueKind}'. " +
-                        "All array elements must be JSON strings.");
+                        $"File-based skill scripts only accept string CLI arguments but received a JSON element of kind '{element.ValueKind}'. " + "All array elements must be JSON strings.");
                 }
 
                 startInfo.ArgumentList.Add(element.GetString()!);
@@ -80,8 +98,7 @@ internal static class SubprocessScriptRunner
         else if (arguments is not null && arguments.Value.ValueKind != JsonValueKind.Null && arguments.Value.ValueKind != JsonValueKind.Undefined)
         {
             throw new InvalidOperationException(
-                $"Expected a JSON array of CLI arguments but received {arguments.Value.ValueKind}. " +
-                "File-based skill scripts expect positional arguments as a JSON array of strings.");
+                $"Expected a JSON array of CLI arguments but received {arguments.Value.ValueKind}. " + "File-based skill scripts expect positional arguments as a JSON array of strings.");
         }
 
         Process? process = null;

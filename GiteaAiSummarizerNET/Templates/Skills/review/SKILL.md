@@ -1,5 +1,5 @@
 ---
-name: reviewer
+name: review
 description: Provides a high-level summary and detailed breakdown of code changes in a Pull Request.
 ---
 

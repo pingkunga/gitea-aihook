@@ -13,12 +13,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog(
     (ctx, services, cfg) =>
-        cfg.ReadFrom
-            .Configuration(ctx.Configuration)
+        cfg.ReadFrom.Configuration(ctx.Configuration)
             .ReadFrom.Services(services)
-            .WriteTo.Console(
-                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}"
-            )
+            .Enrich.FromLogContext()
 );
 
 // ── AI Agent Setup ───────────────────────────────────────────────────────────
@@ -46,6 +43,7 @@ builder.AddAIAgent(
             .UseFileSkill(Path.Combine(AppContext.BaseDirectory, "Templates", "Skills"))
             .UseSkill(giteaSkill)
             .UseFileScriptRunner(SubprocessScriptRunner.RunAsync)            // runner for file scripts
+            .UseLoggerFactory(sp.GetRequiredService<ILoggerFactory>())
             .Build();
 
         return new ChatClientAgent(
@@ -54,7 +52,9 @@ builder.AddAIAgent(
             {
                 Name = key,
                 ChatOptions = new() { 
-                    Instructions = "You are a specialized Gitea PR Summarizer. Use your skills (Reviewer, Security, Style, GiteaTools) to analyze diffs and provide high-quality summaries.", 
+                    //Instructions = "You are a specialized Gitea PR Summarizer. Use your skills (Reviewer, Security, Style, GiteaTools) to analyze diffs and provide high-quality summaries.", 
+                    Instructions = "You are a specialized Gitea PR Summarizer. Use your skills (review, security-checker, style-guard, gitea-tools) to analyze diffs and provide high-quality summaries.", 
+                    //Temperature = 0.2f,
                 },
                 AIContextProviders = [skillsProvider]
             }
