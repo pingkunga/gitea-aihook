@@ -59,4 +59,24 @@ public sealed class GiteaSkill : AgentClassSkill<GiteaSkill>
         var comments = await _gitea.GetIssueCommentsAsync(owner, repo, number, ct);
         return JsonSerializer.Serialize(comments);
     }
+
+    [AgentSkillScript("search_code")]
+    [Description("Searches for a keyword or symbol within the repository code.")]
+    public async Task<string> SearchCodeAsync(
+        [Description("The owner of the repository.")] string owner,
+        [Description("The name of the repository.")] string repo,
+        [Description("The keyword or symbol to search for.")] string keyword,
+        CancellationToken ct = default)
+    {
+        _logger.LogInformation("Skill Call: Searching code for '{Keyword}' in {Owner}/{Repo}", keyword, owner, repo);
+        var url = $"{_gitea.BaseUrl}/api/v1/repos/{owner}/{repo}/search?q={Uri.EscapeDataString(keyword)}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        _gitea.AddHeaders(request);
+
+        var response = await _gitea.HttpClient.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode) return $"Error: {response.StatusCode}";
+
+        var content = await response.Content.ReadAsStringAsync(ct);
+        return content;
+    }
 }
