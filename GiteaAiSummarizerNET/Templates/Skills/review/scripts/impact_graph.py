@@ -1,4 +1,15 @@
+"""
+name: impact_graph
+description: Extracts symbols, routes, and Docker changes from a git diff for impact analysis.
+arguments: [diff]
+"""
 import sys
+import io
+
+# บังคับ stdout ให้เป็น utf-8 เพื่อรองรับ Emoji บน Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
 import re
 
 def extract_impact_candidates(diff):
@@ -57,11 +68,46 @@ def extract_impact_candidates(diff):
     return sorted(list(symbols)), sorted(list(api_routes)), sorted(list(container_changes))
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("No diff content provided.")
+    import json
+    
+    diff_content = ""
+    
+    # 1. Try reading from Stdin (JSON format)
+    try:
+        raw_input = sys.stdin.read().strip()
+        if raw_input:
+            data = json.loads(raw_input)
+            
+            # Microsoft Agents SDK provides arguments as either an array or an object
+            if isinstance(data, list) and len(data) > 0:
+                diff_content = data[0]
+            elif isinstance(data, dict):
+                # Check for "diff" key or the first value in the dict
+                diff_content = data.get("diff")
+                if diff_content is None and len(data) > 0:
+                    diff_content = next(iter(data.values()))
+    except Exception:
+        pass
+
+    # 2. Fallback to CLI arguments (useful for local testing)
+    if not diff_content and len(sys.argv) > 1:
+        diff_content = sys.argv[1]
+
+    # Defensive check: Ensure diff_content is a string and not a nested list/dict
+    if isinstance(diff_content, (list, dict)):
+        # If it's still a list, try to get the first element as a string
+        if isinstance(diff_content, list) and len(diff_content) > 0:
+            diff_content = str(diff_content[0])
+        else:
+            diff_content = str(diff_content)
+    
+    # Ensure it's not None
+    diff_content = diff_content or ""
+
+    if not diff_content:
+        print("No diff content provided via Stdin or arguments.")
         sys.exit(0)
 
-    diff_content = sys.argv[1]
     symbols, routes, containers = extract_impact_candidates(diff_content)
 
     print("## 🔍 Impact Candidates Detected")

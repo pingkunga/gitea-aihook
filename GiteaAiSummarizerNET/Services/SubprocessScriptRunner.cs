@@ -28,7 +28,8 @@ internal static class SubprocessScriptRunner
         AgentFileSkillScript script,
         JsonElement? arguments,
         IServiceProvider? serviceProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!File.Exists(script.FullPath))
         {
@@ -38,7 +39,7 @@ internal static class SubprocessScriptRunner
         string extension = Path.GetExtension(script.FullPath);
         string? interpreter = extension switch
         {
-            ".py" => "python3",
+            ".py" => File.Exists("/usr/bin/python3") || !OperatingSystem.IsWindows() ? "python3" : "python",
             ".js" => "node",
             ".sh" => "bash",
             ".ps1" => "pwsh",
@@ -49,17 +50,23 @@ internal static class SubprocessScriptRunner
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(script.FullPath) ?? ".",
         };
+        
+        // Force UTF-8 for Python on Windows
+        startInfo.EnvironmentVariables["PYTHONUTF8"] = "1";
 
         if (interpreter is not null)
         {
             startInfo.FileName = interpreter;
             startInfo.ArgumentList.Add(script.FullPath);
-            
-            var logger = serviceProvider?.GetService<ILoggerFactory>()?.CreateLogger(nameof(SubprocessScriptRunner));
+
+            var logger = serviceProvider
+                ?.GetService<ILoggerFactory>()
+                ?.CreateLogger(nameof(SubprocessScriptRunner));
             logger?.LogInformation(
                 "Skill Execution: Running file-based skill '{SkillName}' using {Interpreter}...",
                 script.Name,
@@ -69,36 +76,13 @@ internal static class SubprocessScriptRunner
         else
         {
             startInfo.FileName = script.FullPath;
-            var logger = serviceProvider?.GetService<ILoggerFactory>()?.CreateLogger(nameof(SubprocessScriptRunner));
+            var logger = serviceProvider
+                ?.GetService<ILoggerFactory>()
+                ?.CreateLogger(nameof(SubprocessScriptRunner));
             logger?.LogInformation(
                 "Skill Execution: Running file-based skill '{SkillName}' directly...",
                 script.Name
             );
-        }
-
-        if (arguments is { ValueKind: JsonValueKind.Array } json)
-        {
-            // Positional CLI arguments
-            foreach (var element in json.EnumerateArray())
-            {
-                if (element.ValueKind != JsonValueKind.String)
-                {
-                    var logger = serviceProvider?.GetService<ILoggerFactory>()?.CreateLogger(nameof(SubprocessScriptRunner));
-                    logger?.LogError(
-                        "File-based skill scripts only accept string CLI arguments but received a JSON element of kind '{ValueKind}'. All array elements must be JSON strings.",
-                        element.ValueKind
-                    );
-                    throw new InvalidOperationException(
-                        $"File-based skill scripts only accept string CLI arguments but received a JSON element of kind '{element.ValueKind}'. " + "All array elements must be JSON strings.");
-                }
-
-                startInfo.ArgumentList.Add(element.GetString()!);
-            }
-        }
-        else if (arguments is not null && arguments.Value.ValueKind != JsonValueKind.Null && arguments.Value.ValueKind != JsonValueKind.Undefined)
-        {
-            throw new InvalidOperationException(
-                $"Expected a JSON array of CLI arguments but received {arguments.Value.ValueKind}. " + "File-based skill scripts expect positional arguments as a JSON array of strings.");
         }
 
         Process? process = null;
@@ -108,6 +92,14 @@ internal static class SubprocessScriptRunner
             if (process is null)
             {
                 return $"Error: Failed to start process for script '{script.Name}'.";
+            }
+
+            // Write JSON arguments to Stdin channel
+            if (arguments.HasValue)
+            {
+                await process.StandardInput.WriteAsync(arguments.Value.GetRawText());
+                await process.StandardInput.FlushAsync();
+                process.StandardInput.Close();
             }
 
             Task<string> outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
