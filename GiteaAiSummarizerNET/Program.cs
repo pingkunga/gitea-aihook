@@ -7,7 +7,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Agents.AI.Hosting;
 
 // ── Serilog bootstrap ────────────────────────────────────────────────────────
-Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();
+
 
 var builder = WebApplication.CreateBuilder(args);
 

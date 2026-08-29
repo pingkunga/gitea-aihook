@@ -12,8 +12,7 @@ public record DiffChunk(string FileName, string Content);
 public class DiffProcessor(IConfiguration config, ILogger<DiffProcessor> logger)
 {
     private readonly int _maxFullDiffKb = config.GetValue<int>("MaxDiffSizeKb", 50);
-    private const int ChunkedMaxKb = 200;
-
+    private const int ChunkedMaxKb = 2048; //(2 MB)
     public DiffStrategy DetermineStrategy(string diff)
     {
         var sizeKb = System.Text.Encoding.UTF8.GetByteCount(diff) / 1024;

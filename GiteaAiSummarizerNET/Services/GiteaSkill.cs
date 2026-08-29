@@ -69,7 +69,7 @@ public sealed class GiteaSkill : AgentClassSkill<GiteaSkill>
         CancellationToken ct = default)
     {
         _logger.LogInformation("Skill Call: Searching code for '{Keyword}' in {Owner}/{Repo}", keyword, owner, repo);
-        var url = $"{_gitea.BaseUrl}/api/v1/repos/{owner}/{repo}/search?q={Uri.EscapeDataString(keyword)}";
+        var url = $"{_gitea.BaseUrl}/api/v1/repos/{owner}/{repo}/search?q={Uri.EscapeDataString(keyword)}&limit=10";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         _gitea.AddHeaders(request);
 
