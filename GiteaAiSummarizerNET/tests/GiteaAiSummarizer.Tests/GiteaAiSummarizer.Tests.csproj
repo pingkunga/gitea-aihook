@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\GiteaAiSummarizer.csproj" />
+    <ProjectReference Include="..\..\src\GiteaAiSummarizer\GiteaAiSummarizer.csproj" />
   </ItemGroup>
 
 </Project>

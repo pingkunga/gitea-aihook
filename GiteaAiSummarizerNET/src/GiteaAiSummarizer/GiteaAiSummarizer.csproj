@@ -28,10 +28,4 @@
     </Content>
   </ItemGroup>
 
-  <ItemGroup>
-    <Compile Remove="Tests\**" />
-    <Content Remove="Tests\**" />
-    <None Remove="Tests\**" />
-  </ItemGroup>
-
 </Project>
