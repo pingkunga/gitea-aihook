@@ -1,8 +1,10 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
+COPY .dockerignore .dockerignore
+COPY nuget.config ./
 COPY src/GiteaAiSummarizer/GiteaAiSummarizer.csproj src/GiteaAiSummarizer/
 COPY tests/GiteaAiSummarizer.Tests/GiteaAiSummarizer.Tests.csproj tests/GiteaAiSummarizer.Tests/
-RUN dotnet restore src/GiteaAiSummarizer/GiteaAiSummarizer.csproj
+RUN dotnet restore src/GiteaAiSummarizer/GiteaAiSummarizer.csproj --configfile /src/nuget.config
 COPY . .
 RUN dotnet publish src/GiteaAiSummarizer/GiteaAiSummarizer.csproj -c Release -o /app --no-restore
 
