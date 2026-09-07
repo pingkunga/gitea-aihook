@@ -39,28 +39,53 @@ builder.AddAIAgent(
     (sp, key) =>
     {
         var chatClient = sp.GetRequiredService<IChatClient>();
+        var giteaSkill = sp.GetRequiredService<GiteaSkill>();
+        var skillsProvider = new AgentSkillsProviderBuilder()
+            .UseFileSkill(Path.Combine(AppContext.BaseDirectory, "Templates", "Skills"))
+            .UseSkill(giteaSkill)
+            .UseFileScriptRunner(SkillScriptRunner.RunAsync)
+            // Skill tools require approval by default, and FunctionInvokingChatClient is
+            // all-or-nothing about it: one approval-required tool turns every function call in
+            // the response into an approval request with no text. Nobody is here to approve —
+            // this is an unattended webhook — and the scripts ship in our own image, not the PR.
+            .UseOptions(o =>
+            {
+                o.DisableLoadSkillApproval = true;
+                o.DisableReadSkillResourceApproval = true;
+                o.DisableRunSkillScriptApproval = true;
+            })
+            .UseLoggerFactory(sp.GetRequiredService<ILoggerFactory>())
+            .Build();
 
         return new ChatClientAgent(
             chatClient,
-            name: key,
-            instructions: """
-            You are a senior code reviewer summarizing pull request diffs in Gitea. Analyze the given diff and provide:
+            new ChatClientAgentOptions
+            {
+                Name = key,
+                ChatOptions = new()
+                {
+                    Instructions = """
+                    You are a senior code reviewer summarizing pull request diffs in Gitea. Analyze the given diff and provide:
 
-            ## 🔍 Summary
-            A concise 2-3 sentence summary of what this PR does.
+                    ## 🔍 Summary
+                    A concise 2-3 sentence summary of what this PR does.
 
-            ## 📁 Changes Breakdown
-            For each changed file, briefly explain what changed and why.
+                    ## 📁 Changes Breakdown
+                    For each changed file, briefly explain what changed and why.
 
-            ## ⚠️ Impact Analysis
-            - Breaking changes
-            - Performance implications
-            - Security concerns
+                    ## ⚠️ Impact Analysis
+                    - Breaking changes
+                    - Performance implications
+                    - Security concerns
 
-            ## 💡 Review Hints
-            Specific lines or patterns the reviewer should pay extra attention to.
-            """
-            // TODO: pass AITool[] here once Review Hints needs code inspection
+                    ## 💡 Review Hints
+                    Specific lines or patterns the reviewer should pay extra attention to.
+                    """
+                },
+                AIContextProviders = [skillsProvider]
+            },
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp
         );
     }
 );
@@ -85,6 +110,7 @@ builder.Services.AddHttpClient<GiteaApiClient>(
             client.DefaultRequestHeaders.Add("CF-Access-Client-Secret", cfSecret);
     }
 );
+builder.Services.AddSingleton<GiteaSkill>();
 builder.Services.AddSingleton<DiffProcessor>();
 builder.Services.AddScoped<SummaryService>();
 

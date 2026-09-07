@@ -2,6 +2,7 @@ using System.Diagnostics;
 using GiteaAiSummarizer.Models;
 using Scriban;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
 namespace GiteaAiSummarizer.Services;
 
@@ -87,6 +88,30 @@ public class SummaryService(
                     )
             };
 
+            // An empty summary is a failure, not a success with placeholder text. Bail before
+            // posting anything so the commit status tells the truth.
+            if (string.IsNullOrWhiteSpace(aiSummary))
+            {
+                logger.LogError(
+                    "AI summary produced no output for PR #{Number} in {Repo} (strategy: {Strategy})",
+                    pr.Number,
+                    repo,
+                    strategy
+                );
+
+                await gitea.CreateCommitStatusAsync(
+                    owner,
+                    repoName,
+                    commitSha,
+                    _statusContext,
+                    "failure",
+                    "AI summary produced no output",
+                    pr.HtmlUrl,
+                    ct
+                );
+                return;
+            }
+
             sw.Stop();
             var provider = config["AI:ENGINE_TYPE"] ?? "AI";
             var comment = FormatComment(aiSummary, sw.Elapsed, provider);
@@ -171,7 +196,14 @@ public class SummaryService(
     {
         var prompt = await BuildPromptAsync(pr, diffContent);
         var response = await agent.RunAsync(prompt, session, cancellationToken: ct);
-        return string.IsNullOrWhiteSpace(response.Text) ? "No summary found." : response.Text;
+
+        if (string.IsNullOrWhiteSpace(response.Text))
+        {
+            LogEmptyResponse("full-diff summary", response);
+            return "";
+        }
+
+        return response.Text;
     }
 
     private async Task<string> SummarizeChunkedAsync(
@@ -182,26 +214,85 @@ public class SummaryService(
     )
     {
         var chunks = diffProcessor.SplitByFile(diff);
+        var prHeader = $"PR Title: {pr.Title}\nPR Description: {pr.Body}\nTarget Branch: {pr.Base.Ref}\nSource Branch: {pr.Head.Ref}";
+        var fileSummaries = new List<string>();
 
         for (var i = 0; i < chunks.Count; i++)
         {
             var chunk = chunks[i];
             // Only the first turn needs PR metadata — it stays in the shared session's
-            // history for every later turn, including the consolidation call below.
+            // history for every later chunk turn.
             var chunkPrompt = i == 0
-                ? $"PR Title: {pr.Title}\nPR Description: {pr.Body}\nTarget Branch: {pr.Base.Ref}\nSource Branch: {pr.Head.Ref}\n\nNow summarize this file: {chunk.FileName}\n\n{chunk.Content}"
+                ? $"{prHeader}\n\nNow summarize this file: {chunk.FileName}\n\n{chunk.Content}"
                 : $"Now summarize this file: {chunk.FileName}\n\n{chunk.Content}";
 
-            await agent.RunAsync(chunkPrompt, session, cancellationToken: ct);
+            var response = await agent.RunAsync(chunkPrompt, session, cancellationToken: ct);
+
+            // A turn that ends on tool calls leaves no summary in the session history, so collect
+            // the text here rather than assuming the consolidation turn will find it.
+            if (string.IsNullOrWhiteSpace(response.Text))
+            {
+                LogEmptyResponse($"chunk '{chunk.FileName}'", response);
+                continue;
+            }
+
+            fileSummaries.Add($"### {chunk.FileName}\n\n{response.Text.Trim()}");
             logger.LogInformation("Summarized chunk for file: {FileName}", chunk.FileName);
         }
 
+        if (fileSummaries.Count == 0)
+        {
+            logger.LogError(
+                "No file summaries were produced for any of the {ChunkCount} chunks",
+                chunks.Count
+            );
+            return "";
+        }
+
+        var joined = string.Join("\n\n", fileSummaries);
+
+        // Consolidate in a fresh session: the chunk session carries the whole diff plus every tool
+        // result, which is exactly the context load chunking exists to avoid.
+        var consolidationSession = await agent.CreateSessionAsync(ct);
         var finalResponse = await agent.RunAsync(
-            "Consolidate the file summaries above into one PR summary following the required format.",
-            session,
+            "Consolidate these file summaries into one PR summary following the required format.\n\n"
+                + prHeader + "\n\n"
+                + joined,
+            consolidationSession,
             cancellationToken: ct
         );
-        return string.IsNullOrWhiteSpace(finalResponse.Text) ? "No summary found." : finalResponse.Text;
+
+        if (!string.IsNullOrWhiteSpace(finalResponse.Text))
+            return finalResponse.Text;
+
+        // Per-file summaries beat nothing when only the consolidation turn came back empty.
+        LogEmptyResponse("chunked consolidation", finalResponse);
+        return joined;
+
+    }
+
+    /// <summary>
+    /// Records what a run actually returned when it produced no text, so an empty summary can be
+    /// traced to tool calls, approval requests, or a truncated response instead of vanishing.
+    /// </summary>
+    private void LogEmptyResponse(string stage, AgentResponse response)
+    {
+        var contents = response.Messages.SelectMany(m => m.Contents).ToList();
+        var contentTypes = contents
+            .GroupBy(c => c.GetType().Name)
+            .Select(g => $"{g.Key}={g.Count()}");
+        var functionCalls = contents.OfType<FunctionCallContent>().Select(c => c.Name).ToList();
+
+        logger.LogWarning(
+            "Agent run returned no text at {Stage}: {MessageCount} messages, contents [{ContentTypes}], "
+                + "{FunctionCallCount} function calls [{FunctionNames}], finish reason {FinishReason}",
+            stage,
+            response.Messages.Count,
+            string.Join(", ", contentTypes),
+            functionCalls.Count,
+            string.Join(", ", functionCalls.Distinct()),
+            response.FinishReason?.ToString() ?? "none"
+        );
     }
 
     private async Task<string> BuildPromptAsync(

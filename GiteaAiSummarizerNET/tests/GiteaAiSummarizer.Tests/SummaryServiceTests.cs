@@ -17,6 +17,9 @@ public class SummaryServiceTests
     {
         public List<List<ChatMessage>> Calls { get; } = new();
 
+        // Simulates a turn that ends on tool calls: messages come back, but no text content.
+        public bool ReturnNoText { get; init; }
+
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
@@ -25,7 +28,7 @@ public class SummaryServiceTests
         {
             var list = messages.ToList();
             Calls.Add(list);
-            var reply = $"response-{Calls.Count - 1}";
+            var reply = ReturnNoText ? "" : $"response-{Calls.Count - 1}";
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, reply)));
         }
 
@@ -72,10 +75,11 @@ public class SummaryServiceTests
 
     private static (SummaryService Service, FakeChatClient Chat, FakeGiteaHandler Handler) CreateService(
         int maxDiffSizeKb,
-        string diff
+        string diff,
+        bool returnNoText = false
     )
     {
-        var chat = new FakeChatClient();
+        var chat = new FakeChatClient { ReturnNoText = returnNoText };
         var agent = new ChatClientAgent(chat, name: "TestAgent", instructions: "test instructions");
 
         var handler = new FakeGiteaHandler { Diff = diff };
@@ -131,7 +135,7 @@ public class SummaryServiceTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ChunkedDiff_ReusesOneSessionAcrossAllCalls()
+    public async Task ProcessAsync_ChunkedDiff_SharesSessionAcrossChunksThenConsolidatesInAFreshOne()
     {
         var diff =
             "diff --git a/foo.cs b/foo.cs\n+foo change\n"
@@ -144,27 +148,51 @@ public class SummaryServiceTests
         // 2 file chunks + 1 consolidation call
         Assert.Equal(3, chat.Calls.Count);
 
-        // Session reuse: each call's message history is longer than the last,
-        // proving prior turns (including the model's own replies) carry forward.
+        // The chunk turns share one session: each carries more history than the last.
         Assert.True(chat.Calls[1].Count > chat.Calls[0].Count);
-        Assert.True(chat.Calls[2].Count > chat.Calls[1].Count);
 
-        // Only the first chunk call should carry PR metadata; later calls stay short.
-        var firstUserText = chat.Calls[0].Last().Text;
-        Assert.Contains("PR Title:", firstUserText);
-        var secondUserText = chat.Calls[1].Last().Text;
-        Assert.DoesNotContain("PR Title:", secondUserText);
+        // The consolidation turn runs in a fresh session, so it carries only its own prompt
+        // instead of the whole diff plus every tool result the chunk session accumulated.
+        Assert.True(chat.Calls[2].Count < chat.Calls[1].Count);
+        Assert.Equal(chat.Calls[0].Count, chat.Calls[2].Count);
 
-        // The consolidation turn relies on session history, not a manually
-        // re-pasted concatenation of prior partial summaries.
+        // Only the first chunk call should carry PR metadata; later chunk calls stay short.
+        Assert.Contains("PR Title:", chat.Calls[0].Last().Text);
+        Assert.DoesNotContain("PR Title:", chat.Calls[1].Last().Text);
+
+        // The per-file summaries are passed explicitly, because a chunk turn that ends on tool
+        // calls would leave nothing in the session history for the consolidation turn to find.
         var consolidationText = chat.Calls[2].Last().Text;
-        Assert.Equal(
-            "Consolidate the file summaries above into one PR summary following the required format.",
-            consolidationText
-        );
+        Assert.Contains("Consolidate these file summaries", consolidationText);
+        Assert.Contains("PR Title:", consolidationText);
+        Assert.Contains("foo.cs", consolidationText);
+        Assert.Contains("bar.cs", consolidationText);
+        Assert.Contains("response-0", consolidationText);
+        Assert.Contains("response-1", consolidationText);
 
         var posted = handler.Requests.Single(r => r.Method == "POST" && r.Path.EndsWith("/comments"));
         Assert.Contains("response-2", posted.Body); // the consolidation call's reply
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AgentReturnsNoText_PostsNoCommentAndFailsTheCommitStatus()
+    {
+        var (service, _, handler) = CreateService(
+            maxDiffSizeKb: 1000,
+            diff: "diff --git a/foo.cs b/foo.cs\n+hi\n",
+            returnNoText: true
+        );
+
+        await service.ProcessAsync(MakePayload());
+
+        // An empty summary is a failure, not a success with placeholder text.
+        Assert.DoesNotContain(handler.Requests, r => r.Method == "POST" && r.Path.EndsWith("/comments"));
+
+        var statuses = handler
+            .Requests.Where(r => r.Method == "POST" && r.Path.Contains("/statuses/"))
+            .ToList();
+        Assert.Contains(statuses, r => r.Body!.Contains("failure"));
+        Assert.DoesNotContain(statuses, r => r.Body!.Contains("success"));
     }
 
     [Fact]
