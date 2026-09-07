@@ -65,7 +65,7 @@ The production-ready version is built using **ASP.NET Core 10 Minimal API**.
 #### Quick Start (.NET)
 1. **Clone & Configure:**
    ```bash
-   git clone https://github.com/your-repo/GiteaAiSummarizer.git
+   git clone https://github.com/pingkunga/gitea-aihook.git
    cp .env.example .env
    ```
 2. **Setup Environment:** Update your `.env` with Gitea and AI provider credentials.
