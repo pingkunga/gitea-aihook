@@ -25,14 +25,28 @@ sequenceDiagram
     B->>G: Set Commit Status: PENDING
     B->>G: Fetch PR Diff & Latest Commit
     B->>AI: Send Diff + Metadata (Scriban Prompt)
-    AI-->>B: Return Summary & Commit Suggestion
-    B->>G: Upsert PR Comment (using Hidden Marker)
-    B->>G: Set Commit Status: SUCCESS
+
+    opt AI calls an Agent Skill tool
+        AI-->>B: Request tool call (get_issue / search_code / run impact_graph.py)
+        B->>G: Fetch issue, comments, or code matches (if a Gitea tool)
+        G-->>B: Tool result
+        B->>AI: Return tool result, continue reasoning
+    end
+
+    AI-->>B: Return Summary
+
+    alt Summary produced
+        B->>G: Upsert PR Comment (using Hidden Marker)
+        B->>G: Set Commit Status: SUCCESS
+    else Summary empty
+        B->>G: Set Commit Status: FAILURE
+    end
     end
 ```
 
 ### Key Features
 - **Multi-LLM Support:** Azure AI Foundry, OpenAI, Gemini, Ollama, and Anthropic.
+- **Agent Skills:** the AI can call back into Gitea (`get_issue`, `get_issue_comments`, `search_code`) and run local analysis scripts (`impact_graph.py` for symbol/route/Docker impact) during review — extensible via `GiteaAiSummarizerNET/src/GiteaAiSummarizer/Templates/Skills/`.
 - **Diff Management:** 3-tier strategy (Full / Chunked / File-level) to handle large changes within token limits.
 - **Security:** HMAC-SHA256 signature verification for all incoming webhooks.
 - **Customizable:** Change the summary tone and structure via `GiteaAiSummarizerNET/src/GiteaAiSummarizer/Templates/default-prompt.txt`.
