@@ -1,15 +1,13 @@
 using System.Diagnostics;
-using System.Text;
 using GiteaAiSummarizer.Models;
 using Scriban;
-using Microsoft.Extensions.AI;
 using Microsoft.Agents.AI;
 
 namespace GiteaAiSummarizer.Services;
 
 public class SummaryService(
     GiteaApiClient gitea,
-    IChatClient chatClient,
+    [FromKeyedServices("GiteaSummarizerAgent")] AIAgent agent,
     DiffProcessor diffProcessor,
     IConfiguration config,
     ILogger<SummaryService> logger
@@ -71,21 +69,27 @@ public class SummaryService(
             var diff = await gitea.GetDiffAsync(owner, repoName, pr.Number, ct);
             var strategy = diffProcessor.DetermineStrategy(diff);
 
+            // One session per PR run, never persisted — keeps the service stateless
+            // across invocations while giving a single run's chunk calls shared context.
+            var session = await agent.CreateSessionAsync(ct);
+
             string aiSummary = strategy switch
             {
-                DiffStrategy.FullDiff => await SummarizeFullDiffAsync(pr, diff, ct),
-                DiffStrategy.Chunked => await SummarizeChunkedAsync(pr, diff, ct),
+                DiffStrategy.FullDiff => await SummarizeFullDiffAsync(pr, diff, session, ct),
+                DiffStrategy.Chunked => await SummarizeChunkedAsync(pr, diff, session, ct),
                 DiffStrategy.FileLevelSummary
                 or _
                     => await SummarizeFullDiffAsync(
                         pr,
                         diffProcessor.BuildFileLevelSummary(diff),
+                        session,
                         ct
                     )
             };
 
             sw.Stop();
-            var comment = FormatComment(aiSummary, sw.Elapsed, "Microsoft Agent");
+            var provider = config["AI:ENGINE_TYPE"] ?? "AI";
+            var comment = FormatComment(aiSummary, sw.Elapsed, provider);
             await UpsertSummaryCommentAsync(owner, repoName, pr.Number, comment, ct);
 
             await gitea.CreateCommitStatusAsync(
@@ -161,54 +165,43 @@ public class SummaryService(
     private async Task<string> SummarizeFullDiffAsync(
         PullRequest pr,
         string diffContent,
+        AgentSession session,
         CancellationToken ct
     )
     {
         var prompt = await BuildPromptAsync(pr, diffContent);
-        var response = await chatClient.GetResponseAsync(prompt, cancellationToken: ct);
-        return response.Messages?.FirstOrDefault()?.Text ?? "No summary found.";
+        var response = await agent.RunAsync(prompt, session, cancellationToken: ct);
+        return string.IsNullOrWhiteSpace(response.Text) ? "No summary found." : response.Text;
     }
 
     private async Task<string> SummarizeChunkedAsync(
         PullRequest pr,
         string diff,
+        AgentSession session,
         CancellationToken ct
     )
     {
         var chunks = diffProcessor.SplitByFile(diff);
-        var partialSummaries = new StringBuilder();
 
-        foreach (var chunk in chunks)
+        for (var i = 0; i < chunks.Count; i++)
         {
-            var chunkPrompt = await BuildPromptAsync(
-                pr,
-                chunk.Content,
-                $"Focus only on the file: {chunk.FileName}. Provide a brief summary of changes."
-            );
+            var chunk = chunks[i];
+            // Only the first turn needs PR metadata — it stays in the shared session's
+            // history for every later turn, including the consolidation call below.
+            var chunkPrompt = i == 0
+                ? $"PR Title: {pr.Title}\nPR Description: {pr.Body}\nTarget Branch: {pr.Base.Ref}\nSource Branch: {pr.Head.Ref}\n\nNow summarize this file: {chunk.FileName}\n\n{chunk.Content}"
+                : $"Now summarize this file: {chunk.FileName}\n\n{chunk.Content}";
 
-            var partialResponse = await chatClient.GetResponseAsync(
-                chunkPrompt,
-                cancellationToken: ct
-            );
-            var partial = partialResponse.Messages?.FirstOrDefault()?.Text ?? string.Empty;
-
-            partialSummaries.AppendLine($"### `{chunk.FileName}`");
-            partialSummaries.AppendLine(partial);
-            partialSummaries.AppendLine();
+            await agent.RunAsync(chunkPrompt, session, cancellationToken: ct);
             logger.LogInformation("Summarized chunk for file: {FileName}", chunk.FileName);
         }
 
-        var consolidationPrompt = await BuildPromptAsync(
-            pr,
-            $"[Chunked summaries per file]\n{partialSummaries}",
-            "Consolidate the above per-file summaries into a cohesive PR summary with all required sections."
-        );
-
-        var finalResponse = await chatClient.GetResponseAsync(
-            consolidationPrompt,
+        var finalResponse = await agent.RunAsync(
+            "Consolidate the file summaries above into one PR summary following the required format.",
+            session,
             cancellationToken: ct
         );
-        return finalResponse.Messages?.FirstOrDefault()?.Text ?? "No summary found.";
+        return string.IsNullOrWhiteSpace(finalResponse.Text) ? "No summary found." : finalResponse.Text;
     }
 
     private async Task<string> BuildPromptAsync(
@@ -253,22 +246,6 @@ public class SummaryService(
         """;
 
     private const string DefaultPromptTemplate = """
-        You are a senior code reviewer. Analyze the following Pull Request diff and provide:
-
-        ## 🔍 Summary
-        A concise 2-3 sentence summary of what this PR does.
-
-        ## 📁 Changes Breakdown
-        For each changed file, briefly explain what changed and why.
-
-        ## ⚠️ Impact Analysis
-        - Breaking changes
-        - Performance implications
-        - Security concerns
-
-        ## 💡 Review Hints
-        Specific lines or patterns the reviewer should pay extra attention to.
-
         {{ if extra_instruction != "" }}
         Additional instruction: {{ extra_instruction }}
         {{ end }}

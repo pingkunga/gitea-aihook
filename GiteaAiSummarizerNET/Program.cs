@@ -44,27 +44,26 @@ builder.AddAIAgent(
             chatClient,
             name: key,
             instructions: """
-            You are a helpful assistant for summarizing pull request diffs in Gitea. Given a diff, you will produce a concise summary of the changes, including what was changed and why if possible. Focus on the intent and impact of the changes rather than just listing them. Use the following format for your summary:
+            You are a senior code reviewer summarizing pull request diffs in Gitea. Analyze the given diff and provide:
+
+            ## 🔍 Summary
+            A concise 2-3 sentence summary of what this PR does.
+
+            ## 📁 Changes Breakdown
+            For each changed file, briefly explain what changed and why.
+
+            ## ⚠️ Impact Analysis
+            - Breaking changes
+            - Performance implications
+            - Security concerns
+
+            ## 💡 Review Hints
+            Specific lines or patterns the reviewer should pay extra attention to.
             """
-        // tools: [
-        //     .. tools.Cast<AITool>()
-        // ]
+            // TODO: pass AITool[] here once Review Hints needs code inspection
         );
     }
 );
-
-// .Build(sp =>
-// {
-//     var config = sp.GetRequiredService<IConfiguration>();
-//     var aiConfig = config.GetSection("AI");
-
-//     return ChatClientFactory.CreateChatClient(
-//         aiConfig["ENGINE_TYPE"],
-//         aiConfig["ENDPOINT"],
-//         aiConfig["MODEL_NAME"],
-//         aiConfig["API_KEY"]
-//     );
-// });
 
 // ── Services ─────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<WebhookVerifier>();
