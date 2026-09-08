@@ -31,5 +31,11 @@
   <ItemGroup>
     <InternalsVisibleTo Include="GiteaAiSummarizer.Tests" />
   </ItemGroup>
+  
+  <ItemGroup>
+    <Compile Remove="Templates/**/*.cs" />
+    <!-- if you still want them visible in the IDE as content: -->
+    <None Include="Templates/**/*.cs" />
+  </ItemGroup>
 
 </Project>

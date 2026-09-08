@@ -43,6 +43,7 @@ internal static class SkillScriptRunner
             ".js" => "node",
             ".sh" => "bash",
             ".ps1" => "pwsh",
+            ".cs" => "dotnet",
             _ => null,
         };
 
