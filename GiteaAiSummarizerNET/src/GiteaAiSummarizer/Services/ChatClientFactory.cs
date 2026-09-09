@@ -4,7 +4,6 @@ using GenerativeAI.Microsoft;
 using System.ClientModel;
 using OpenAI;
 using Azure.AI.Projects;
-using Microsoft.Agents.AI;
 using Azure;
 using Azure.Identity;
 using Azure.AI.OpenAI;

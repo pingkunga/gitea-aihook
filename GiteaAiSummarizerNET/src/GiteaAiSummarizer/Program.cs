@@ -39,32 +39,56 @@ builder.AddAIAgent(
     (sp, key) =>
     {
         var chatClient = sp.GetRequiredService<IChatClient>();
+        var giteaSkill = sp.GetRequiredService<GiteaSkill>();
+        var skillsProvider = new AgentSkillsProviderBuilder()
+            .UseFileSkill(Path.Combine(AppContext.BaseDirectory, "Templates", "Skills"))
+            .UseSkill(giteaSkill)
+            .UseFileScriptRunner(SkillScriptRunner.RunAsync)
+            // Skill tools require approval by default, and FunctionInvokingChatClient is
+            // all-or-nothing about it: one approval-required tool turns every function call in
+            // the response into an approval request with no text. Nobody is here to approve —
+            // this is an unattended webhook — and the scripts ship in our own image, not the PR.
+            .UseOptions(o =>
+            {
+                o.DisableLoadSkillApproval = true;
+                o.DisableReadSkillResourceApproval = true;
+                o.DisableRunSkillScriptApproval = true;
+            })
+            .UseLoggerFactory(sp.GetRequiredService<ILoggerFactory>())
+            .Build();
 
         return new ChatClientAgent(
             chatClient,
-            name: key,
-            instructions: """
-            You are a helpful assistant for summarizing pull request diffs in Gitea. Given a diff, you will produce a concise summary of the changes, including what was changed and why if possible. Focus on the intent and impact of the changes rather than just listing them. Use the following format for your summary:
-            """
-        // tools: [
-        //     .. tools.Cast<AITool>()
-        // ]
+            new ChatClientAgentOptions
+            {
+                Name = key,
+                ChatOptions = new()
+                {
+                    Instructions = """
+                    You are a senior code reviewer summarizing pull request diffs in Gitea. Analyze the given diff and provide:
+
+                    ## 🔍 Summary
+                    A concise 2-3 sentence summary of what this PR does.
+
+                    ## 📁 Changes Breakdown
+                    For each changed file, briefly explain what changed and why.
+
+                    ## ⚠️ Impact Analysis
+                    - Breaking changes
+                    - Performance implications
+                    - Security concerns
+
+                    ## 💡 Review Hints
+                    Specific lines or patterns the reviewer should pay extra attention to.
+                    """
+                },
+                AIContextProviders = [skillsProvider]
+            },
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp
         );
     }
 );
-
-// .Build(sp =>
-// {
-//     var config = sp.GetRequiredService<IConfiguration>();
-//     var aiConfig = config.GetSection("AI");
-
-//     return ChatClientFactory.CreateChatClient(
-//         aiConfig["ENGINE_TYPE"],
-//         aiConfig["ENDPOINT"],
-//         aiConfig["MODEL_NAME"],
-//         aiConfig["API_KEY"]
-//     );
-// });
 
 // ── Services ─────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<WebhookVerifier>();
@@ -86,6 +110,7 @@ builder.Services.AddHttpClient<GiteaApiClient>(
             client.DefaultRequestHeaders.Add("CF-Access-Client-Secret", cfSecret);
     }
 );
+builder.Services.AddSingleton<GiteaSkill>();
 builder.Services.AddSingleton<DiffProcessor>();
 builder.Services.AddScoped<SummaryService>();
 
