@@ -3,10 +3,6 @@ using OllamaSharp;
 using GenerativeAI.Microsoft;
 using System.ClientModel;
 using OpenAI;
-using Azure.AI.Projects;
-using Azure;
-using Azure.Identity;
-using Azure.AI.OpenAI;
 using OpenAI.Chat;
 
 namespace GiteaAiSummarizer.Services;
