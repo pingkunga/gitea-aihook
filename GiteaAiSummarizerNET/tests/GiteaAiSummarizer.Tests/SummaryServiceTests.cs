@@ -20,6 +20,9 @@ public class SummaryServiceTests
         // Simulates a turn that ends on tool calls: messages come back, but no text content.
         public bool ReturnNoText { get; init; }
 
+        // When set, the first call asks for this tool instead of replying with text.
+        public string? CallToolFirst { get; init; }
+
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
@@ -28,6 +31,11 @@ public class SummaryServiceTests
         {
             var list = messages.ToList();
             Calls.Add(list);
+            if (CallToolFirst is not null && Calls.Count == 1)
+            {
+                var call = new FunctionCallContent("call-1", CallToolFirst, new Dictionary<string, object?> { ["x"] = 1 });
+                return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, [call])));
+            }
             var reply = ReturnNoText ? "" : $"response-{Calls.Count - 1}";
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, reply)));
         }
@@ -44,7 +52,7 @@ public class SummaryServiceTests
     }
 
     // Fake Gitea backend: serves a diff, an empty comment list, and records every request.
-    private sealed class FakeGiteaHandler : HttpMessageHandler
+    internal sealed class FakeGiteaHandler : HttpMessageHandler
     {
         public string Diff { get; init; } = "diff --git a/foo.cs b/foo.cs\n+hi\n";
         public List<GiteaIssueComment> ExistingComments { get; init; } = new();
@@ -76,11 +84,14 @@ public class SummaryServiceTests
     private static (SummaryService Service, FakeChatClient Chat, FakeGiteaHandler Handler) CreateService(
         int maxDiffSizeKb,
         string diff,
-        bool returnNoText = false
+        bool returnNoText = false,
+        string? callToolFirst = null,
+        IList<AITool>? tools = null,
+        bool includeSkillOutputs = false
     )
     {
-        var chat = new FakeChatClient { ReturnNoText = returnNoText };
-        var agent = new ChatClientAgent(chat, name: "TestAgent", instructions: "test instructions");
+        var chat = new FakeChatClient { ReturnNoText = returnNoText, CallToolFirst = callToolFirst };
+        var agent = new ChatClientAgent(chat, name: "TestAgent", instructions: "test instructions", tools: tools);
 
         var handler = new FakeGiteaHandler { Diff = diff };
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://gitea.test") };
@@ -92,7 +103,8 @@ public class SummaryServiceTests
                     ["Gitea:Url"] = "http://gitea.test",
                     ["Gitea:AccessToken"] = "token",
                     ["AI:ENGINE_TYPE"] = "Ollama",
-                    ["MaxDiffSizeKb"] = maxDiffSizeKb.ToString()
+                    ["MaxDiffSizeKb"] = maxDiffSizeKb.ToString(),
+                    ["Summary:IncludeSkillOutputs"] = includeSkillOutputs.ToString()
                 }
             )
             .Build();
@@ -135,7 +147,21 @@ public class SummaryServiceTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ChunkedDiff_SharesSessionAcrossChunksThenConsolidatesInAFreshOne()
+    public async Task ProcessAsync_SmallDiff_PromptCarriesOwnerRepoAndPrNumber()
+    {
+        var (service, chat, _) = CreateService(maxDiffSizeKb: 1000, diff: "diff --git a/foo.cs b/foo.cs\n+hi\n");
+
+        await service.ProcessAsync(MakePayload());
+
+        // gitea-tools scripts need owner/repo; without them in the prompt the model has to guess.
+        var prompt = chat.Calls[0].Last().Text;
+        Assert.Contains("owner: acme", prompt);
+        Assert.Contains("repo: widgets", prompt);
+        Assert.Contains("PR Number: 1", prompt);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ChunkedDiff_RunsEachChunkInAFreshSessionThenConsolidates()
     {
         var diff =
             "diff --git a/foo.cs b/foo.cs\n+foo change\n"
@@ -148,17 +174,15 @@ public class SummaryServiceTests
         // 2 file chunks + 1 consolidation call
         Assert.Equal(3, chat.Calls.Count);
 
-        // The chunk turns share one session: each carries more history than the last.
-        Assert.True(chat.Calls[1].Count > chat.Calls[0].Count);
-
-        // The consolidation turn runs in a fresh session, so it carries only its own prompt
-        // instead of the whole diff plus every tool result the chunk session accumulated.
-        Assert.True(chat.Calls[2].Count < chat.Calls[1].Count);
+        // Every turn runs in its own session, so none carries an earlier chunk's diff or tool traffic.
+        Assert.Equal(chat.Calls[0].Count, chat.Calls[1].Count);
         Assert.Equal(chat.Calls[0].Count, chat.Calls[2].Count);
+        Assert.DoesNotContain(chat.Calls[1], m => m.Text.Contains("foo change"));
 
-        // Only the first chunk call should carry PR metadata; later chunk calls stay short.
+        // With no shared history, each chunk call repeats the PR metadata.
         Assert.Contains("PR Title:", chat.Calls[0].Last().Text);
-        Assert.DoesNotContain("PR Title:", chat.Calls[1].Last().Text);
+        Assert.Contains("PR Title:", chat.Calls[1].Last().Text);
+        Assert.Contains("owner: acme", chat.Calls[1].Last().Text);
 
         // The per-file summaries are passed explicitly, because a chunk turn that ends on tool
         // calls would leave nothing in the session history for the consolidation turn to find.
@@ -172,6 +196,36 @@ public class SummaryServiceTests
 
         var posted = handler.Requests.Single(r => r.Method == "POST" && r.Path.EndsWith("/comments"));
         Assert.Contains("response-2", posted.Body); // the consolidation call's reply
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProcessAsync_ToolCalled_CapturesItsResultIntoTheCommentOnlyWhenEnabled(bool include)
+    {
+        var tool = AIFunctionFactory.Create((int x) => $"demo-tool-output-{x}", "demo_tool");
+        var (service, _, handler) = CreateService(
+            maxDiffSizeKb: 1000,
+            diff: "diff --git a/foo.cs b/foo.cs\n+hi\n",
+            callToolFirst: "demo_tool",
+            tools: [tool],
+            includeSkillOutputs: include
+        );
+
+        await service.ProcessAsync(MakePayload());
+
+        var posted = handler.Requests.Single(r => r.Method == "POST" && r.Path.EndsWith("/comments"));
+        var comment = System.Text.Json.JsonDocument.Parse(posted.Body!).RootElement.GetProperty("body").GetString()!;
+        if (include)
+        {
+            Assert.Contains("<details><summary>🛠 Skill outputs</summary>", comment);
+            Assert.Contains("demo_tool", comment);
+            Assert.Contains("demo-tool-output-1", comment);
+        }
+        else
+        {
+            Assert.DoesNotContain("Skill outputs", comment);
+        }
     }
 
     [Fact]

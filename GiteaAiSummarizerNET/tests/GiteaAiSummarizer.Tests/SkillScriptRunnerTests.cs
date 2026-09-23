@@ -47,9 +47,21 @@ public class SkillScriptRunnerTests
                 Array.Empty<AgentSkillScript>()
             );
 
+        // Since MAF 1.21 a file script also carries the path scope it is revalidated against
+        // (AgentFileSkillPathScope, internal): trusted skills root + this skill's directory.
+        var skillDir = Path.GetDirectoryName(Path.GetDirectoryName(scriptPath))!;
+        var scopeType = typeof(AgentFileSkillScript).Assembly.GetType("Microsoft.Agents.AI.AgentFileSkillPathScope", throwOnError: true)!;
+        var scope = Activator.CreateInstance(
+            scopeType,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            args: [Path.GetDirectoryName(skillDir)!, skillDir],
+            culture: null
+        );
+
         AgentFileSkillScriptRunner runner = SkillScriptRunner.RunAsync;
         var script = (AgentFileSkillScript)
-            CreateViaInternalCtor(typeof(AgentFileSkillScript), "impact_graph", scriptPath, runner);
+            CreateViaInternalCtor(typeof(AgentFileSkillScript), "impact_graph", scriptPath, scope, runner);
 
         return (skill, script);
     }
@@ -73,6 +85,33 @@ public class SkillScriptRunnerTests
         sw.Stop();
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(30), $"Expected a fast return, took {sw.Elapsed}");
         Assert.Contains("No significant symbols", result?.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_NoArguments_FeedsTheCurrentDiffToStdin()
+    {
+        var (skill, script) = CreateImpactGraphScript();
+
+        // The model calls with no arguments; the runner supplies the diff under review itself,
+        // so the model never has to echo the whole diff back as a tool argument.
+        SkillRunContext.CurrentDiff = "diff --git a/foo.cs b/foo.cs\n+++ b/foo.cs\n+    public string GetBar() { return \"x\"; }\n";
+        try
+        {
+            using var emptyArray = JsonDocument.Parse("[]");
+            var result = await SkillScriptRunner.RunAsync(
+                skill,
+                script,
+                arguments: emptyArray.RootElement.Clone(),
+                serviceProvider: null,
+                CancellationToken.None
+            );
+
+            Assert.Contains("GetBar", result?.ToString());
+        }
+        finally
+        {
+            SkillRunContext.CurrentDiff = null;
+        }
     }
 
     [Fact]
