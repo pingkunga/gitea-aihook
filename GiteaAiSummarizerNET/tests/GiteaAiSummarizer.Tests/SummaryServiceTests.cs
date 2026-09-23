@@ -5,6 +5,7 @@ using GiteaAiSummarizer.Services;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GiteaAiSummarizer.Tests;
@@ -87,7 +88,8 @@ public class SummaryServiceTests
         bool returnNoText = false,
         string? callToolFirst = null,
         IList<AITool>? tools = null,
-        bool includeSkillOutputs = false
+        bool includeSkillOutputs = false,
+        ILogger<SummaryService>? logger = null
     )
     {
         var chat = new FakeChatClient { ReturnNoText = returnNoText, CallToolFirst = callToolFirst };
@@ -111,7 +113,7 @@ public class SummaryServiceTests
 
         var gitea = new GiteaApiClient(httpClient, config, NullLogger<GiteaApiClient>.Instance);
         var diffProcessor = new DiffProcessor(config, NullLogger<DiffProcessor>.Instance);
-        var service = new SummaryService(gitea, agent, diffProcessor, config, NullLogger<SummaryService>.Instance);
+        var service = new SummaryService(gitea, agent, diffProcessor, config, logger ?? NullLogger<SummaryService>.Instance);
 
         return (service, chat, handler);
     }
@@ -226,6 +228,59 @@ public class SummaryServiceTests
         {
             Assert.DoesNotContain("Skill outputs", comment);
         }
+    }
+
+    // Captures formatted log lines so tests can assert on what an operator would see.
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ModelCallsNoTools_WarnsThatNoSkillRan()
+    {
+        var logger = new ListLogger<SummaryService>();
+        var (service, _, _) = CreateService(maxDiffSizeKb: 1000, diff: "diff --git a/foo.cs b/foo.cs\n+hi\n", logger: logger);
+
+        await service.ProcessAsync(MakePayload());
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("Agent run at full-diff summary: 0 tool calls")
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ModelCallsATool_LogsTheToolCountAtInformation()
+    {
+        var logger = new ListLogger<SummaryService>();
+        var tool = AIFunctionFactory.Create((int x) => "ok", "demo_tool");
+        var (service, _, _) = CreateService(
+            maxDiffSizeKb: 1000,
+            diff: "diff --git a/foo.cs b/foo.cs\n+hi\n",
+            callToolFirst: "demo_tool",
+            tools: [tool],
+            logger: logger
+        );
+
+        await service.ProcessAsync(MakePayload());
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Information && e.Message.Contains("1 tool calls [demo_tool]")
+        );
     }
 
     [Fact]

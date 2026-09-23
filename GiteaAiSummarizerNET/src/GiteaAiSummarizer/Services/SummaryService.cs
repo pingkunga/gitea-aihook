@@ -318,6 +318,18 @@ public class SummaryService(
             .GroupBy(c => c.CallId)
             .ToDictionary(g => g.Key, g => g.First());
 
+        // One line per run, even when nothing was called — "0 tool calls" is the signal that the model
+        // answered straight from the diff and no skill or script ran.
+        var callNames = calls.Values.Select(c => c.Name).ToList();
+        logger.Log(
+            callNames.Count == 0 ? LogLevel.Warning : LogLevel.Information,
+            "Agent run at {Stage}: {ToolCallCount} tool calls [{ToolNames}], finish reason {FinishReason}",
+            stage,
+            callNames.Count,
+            string.Join(", ", callNames),
+            response.FinishReason?.ToString() ?? "none"
+        );
+
         foreach (var result in contents.OfType<FunctionResultContent>())
         {
             calls.TryGetValue(result.CallId, out var call);

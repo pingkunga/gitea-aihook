@@ -5,7 +5,7 @@ description: Provides a high-level summary and detailed breakdown of code change
 
 Follow these steps in order to analyze the Pull Request:
 
-1. Run `scripts/impact_graph.py` by calling `run_skill_script` (use that exact `scriptName`) with **no arguments** — the runtime supplies the diff under review automatically. Never paste the diff into the arguments. This identifies modified symbols, API routes, and Docker changes. Skip this step when the input is the diff of a single file — read the diff directly instead.
+1. Run `scripts/impact_graph.py` by calling `run_skill_script` (use that exact `scriptName`) with **no arguments** — the runtime supplies the diff under review automatically. Never paste the diff into the arguments. This identifies modified symbols, API routes, and Docker changes.
 2. Call `gitea-tools.search_code` for at most 5 of the most significant symbols identified, using the `owner` and `repo` given in the prompt's `Repository:` line. Every call costs a round trip, and a turn that spends all of them on tool calls returns no summary at all.
 3. Provide a concise 2-3 sentence summary of what the PR does based on the gathered context.
 4. Explain what changed and why for each changed file.

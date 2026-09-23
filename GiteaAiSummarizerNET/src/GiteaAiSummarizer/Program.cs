@@ -65,7 +65,15 @@ builder.AddAIAgent(
                 ChatOptions = new()
                 {
                     Instructions = """
-                    You are a senior code reviewer summarizing pull request diffs in Gitea. Analyze the given diff and provide:
+                    You are a senior code reviewer summarizing pull request diffs in Gitea.
+
+                    ## Required workflow (do this before writing anything)
+                    1. Call `load_skill` for `review` and for `breaking-change-checker`, then follow each skill's steps,
+                       including running their scripts via `run_skill_script` with no arguments (the runtime supplies the diff).
+                    2. Load `security-checker` or `style-guard` only when the diff warrants it.
+                    3. Then write the final answer in the format below. Never end on a tool call.
+
+                    Analyze the given diff and provide:
 
                     ## 🔍 Summary
                     A concise 2-3 sentence summary of what this PR does.
