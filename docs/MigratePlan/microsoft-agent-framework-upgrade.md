@@ -60,6 +60,31 @@ This service is an unattended webhook with nobody to approve, so `Program.cs` no
 `.UseOptions(...)`. The scripts under `Templates/Skills` ship in our own image and never come from the PR
 under review; if externally-sourced skills are ever added, this decision needs revisiting.
 
+## Harness follow-up (2026-09-23)
+
+- **Per-chunk sessions.** Sharing one session across chunk turns still made chunk N carry chunks 1..N-1 plus
+  every tool result. Each agent turn (full diff, every chunk, consolidation) now runs in its own fresh session
+  via `SummaryService.RunAgentAsync`, and every chunk prompt repeats the short PR header.
+- **Owner/repo in the prompt.** `gitea-tools` scripts need `owner`/`repo`, which the prompt never carried. The
+  template, `DefaultPromptTemplate` and the chunk header now include repository, PR number and PR URL.
+- **No diff echo.** SKILL.md files used to tell the model to paste the diff into `run_skill_script` arguments.
+  `SummaryService` now puts the current diff in `SkillRunContext.CurrentDiff` (an `AsyncLocal`), and
+  `SkillScriptRunner` writes it to stdin (as `["<diff>"]`) whenever the model calls with no arguments.
+- **Tool result capture.** `SkillScriptRunner` logs each script's output (`Skill Result:`), and
+  `SummaryService.CaptureToolResults` pairs every `FunctionCallContent` with its `FunctionResultContent`
+  (`Tool Result at ...:`). `Summary:IncludeSkillOutputs=true` also appends them to the PR comment in `<details>`.
+- **C# skill script in the container.** The runtime image is now `sdk:10.0` so `dotnet <file>.cs` works; the
+  Dockerfile pre-builds each `.cs` script once. For production, pre-publish the script and return to `aspnet`.
+
+## Follow-up bump to 1.22.0 (2026-09-23)
+
+- `Microsoft.Agents.AI` 1.22.0, `Microsoft.Agents.AI.Hosting` 1.22.0-preview.260918.1. These require
+  `Microsoft.Extensions.AI(.OpenAI)` 10.10.0, which in turn requires `OpenAI` ≥ 2.13 (now 2.14.0).
+- `Azure.AI.OpenAI` / `Azure.AI.Projects` removed — only referenced from commented-out code.
+- `Serilog.AspNetCore` pinned to 10.0.0 instead of the floating `9.*`.
+- 1.21 added `AgentFileSkillPathScope` to the internal `AgentFileSkillScript` constructor (file skill path
+  revalidation); `SkillScriptRunnerTests` builds it via reflection. No production code change was needed.
+
 ## Package changes — `GiteaAiSummarizerNET/GiteaAiSummarizer.csproj`
 
 - Bump `Microsoft.Agents.AI.Hosting` → `1.20.0-preview.260831.1` (current latest; this package has **never** shipped a non-preview build — that's normal, the *core* `Microsoft.Agents.AI` package is the GA-stable one).

@@ -264,9 +264,9 @@ dotnet publish src/GiteaAiSummarizer/GiteaAiSummarizer.csproj -c Release
 ```bash
 # From Project Root
 cd GiteaAiSummarizerNET
-docker build -t pingkunga/gitea-ai-summarizer:0.2.2 .
-docker tag pingkunga/gitea-ai-summarizer:0.2.2 pingkunga/gitea_aihook:0.2.2
-docker push pingkunga/gitea_aihook:0.2.2
+docker build --no-cache -t pingkunga/gitea-ai-summarizer:0.2.5 .
+docker tag pingkunga/gitea-ai-summarizer:0.2.5 pingkunga/gitea_aihook:0.2.5
+docker push pingkunga/gitea_aihook:0.2.5
 
 docker run -p 8080:8080 --env-file .env gitea-ai-summarizer
 ```
@@ -279,6 +279,6 @@ docker run -p 8080:8080 --env-file .env gitea-ai-summarizer
 - **AI Providers:** Anthropic Claude, Google Gemini
 - **Template Engine:** Scriban
 - **Logging:** Serilog
-- **Container:** Docker (multi-stage, `aspnet:10.0`)
+- **Container:** Docker (multi-stage, runtime `sdk:10.0` so C# skill scripts can run via `dotnet <file>.cs`)
 
 dotnet run --project GiteaAiSummarizerNET/src/GiteaAiSummarizer/GiteaAiSummarizer.csproj --urls "http://localhost:5000"
