@@ -98,6 +98,59 @@ public class GiteaApiClient(HttpClient http, IConfiguration config, ILogger<Gite
         return pr ?? throw new InvalidOperationException("Invalid pull request response from Gitea.");
     }
 
+    public async Task<string> GetIssueAsync(
+        string owner,
+        string repo,
+        int issueNumber,
+        CancellationToken ct = default
+    )
+    {
+        var url = $"{_baseUrl}/api/v1/repos/{owner}/{repo}/issues/{issueNumber}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        AddHeaders(request);
+
+        var response = await http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            logger.LogError(
+                "Failed to fetch issue. Status: {Status}, Content: {Content}",
+                response.StatusCode,
+                error
+            );
+        }
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct);
+    }
+
+    public async Task<string> SearchCodeAsync(
+        string owner,
+        string repo,
+        string keyword,
+        CancellationToken ct = default
+    )
+    {
+        var url =
+            $"{_baseUrl}/api/v1/repos/{owner}/{repo}/search?q={Uri.EscapeDataString(keyword)}&limit=10";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        AddHeaders(request);
+
+        var response = await http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            logger.LogError(
+                "Failed to search repository code. Status: {Status}, Content: {Content}",
+                response.StatusCode,
+                error
+            );
+        }
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct);
+    }
+
     public async Task CreateCommitStatusAsync(
         string owner,
         string repo,

@@ -1,7 +1,7 @@
 version: "3.8"
 services:
   summarizer:
-    build: ./GiteaAiSummarizer
+    build: ./GiteaAiSummarizerNET
     ports:
       - "8080:8080"
     environment:
@@ -16,6 +16,7 @@ services:
       - AI__API_KEY=${AI__API_KEY}
       - AdminToken=${AdminToken}
       - MaxDiffSizeKb=${MaxDiffSizeKb:-50}
+      - Summary__IncludeSkillOutputs=${Summary__IncludeSkillOutputs:-false}
       - Serilog__MinimumLevel__Default=${Serilog__MinimumLevel__Default:-Information}
       - Logging__LogLevel__Default=${Logging__LogLevel__Default:-Information}
     restart: unless-stopped
