@@ -6,6 +6,7 @@
 
 using System.Diagnostics;
 using System.Text.Json;
+using GiteaAiSummarizer.Services;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,15 +60,19 @@ internal static class SkillScriptRunner
         
         // Force UTF-8 for Python on Windows
         startInfo.EnvironmentVariables["PYTHONUTF8"] = "1";
+        // Keep the dotnet CLI's first-run banner out of stdout — stdout is what the model reads.
+        startInfo.EnvironmentVariables["DOTNET_NOLOGO"] = "1";
+        startInfo.EnvironmentVariables["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+
+        var logger = serviceProvider
+            ?.GetService<ILoggerFactory>()
+            ?.CreateLogger(nameof(SkillScriptRunner));
 
         if (interpreter is not null)
         {
             startInfo.FileName = interpreter;
             startInfo.ArgumentList.Add(script.FullPath);
 
-            var logger = serviceProvider
-                ?.GetService<ILoggerFactory>()
-                ?.CreateLogger(nameof(SkillScriptRunner));
             logger?.LogInformation(
                 "Skill Execution: Running file-based skill '{SkillName}' using {Interpreter}...",
                 script.Name,
@@ -77,9 +82,6 @@ internal static class SkillScriptRunner
         else
         {
             startInfo.FileName = script.FullPath;
-            var logger = serviceProvider
-                ?.GetService<ILoggerFactory>()
-                ?.CreateLogger(nameof(SkillScriptRunner));
             logger?.LogInformation(
                 "Skill Execution: Running file-based skill '{SkillName}' directly...",
                 script.Name
@@ -105,9 +107,16 @@ internal static class SkillScriptRunner
             // Write JSON arguments to Stdin channel. Stdin must be closed unconditionally — a script
             // that reads from stdin (e.g. via sys.stdin.read()) blocks waiting for EOF, and if the
             // caller omits arguments this close is the only thing that ever unblocks it.
-            if (arguments.HasValue)
+            // When the model calls with no arguments, feed the diff under review instead, so the model
+            // never has to echo it back. Wrapped as a one-element array — the shape both scripts parse.
+            string? stdin = HasArguments(arguments)
+                ? arguments!.Value.GetRawText()
+                : SkillRunContext.CurrentDiff is { } diff
+                    ? JsonSerializer.Serialize(new[] { diff })
+                    : null;
+            if (stdin is not null)
             {
-                await process.StandardInput.WriteAsync(arguments.Value.GetRawText());
+                await process.StandardInput.WriteAsync(stdin);
                 await process.StandardInput.FlushAsync();
             }
             process.StandardInput.Close();
@@ -130,7 +139,16 @@ internal static class SkillScriptRunner
                 output += $"\nScript exited with code {process.ExitCode}";
             }
 
-            return string.IsNullOrEmpty(output) ? "(no output)" : output.Trim();
+            output = string.IsNullOrEmpty(output) ? "(no output)" : output.Trim();
+            logger?.LogInformation(
+                "Skill Result: '{SkillName}' exited {ExitCode}, {Length} chars: {Output}",
+                script.Name,
+                process.ExitCode,
+                output.Length,
+                Truncate(output, 2048)
+            );
+            logger?.LogDebug("Skill Result (full): '{SkillName}': {Output}", script.Name, output);
+            return output;
         }
         // Our own timeout, not the caller's cancellation — kill the process and report it like every
         // other failure in this method (a string), not as an exception. Letting this propagate would
@@ -161,4 +179,18 @@ internal static class SkillScriptRunner
             process?.Dispose();
         }
     }
+
+    private static bool HasArguments(JsonElement? arguments) =>
+        arguments is { } a
+        && a.ValueKind switch
+        {
+            JsonValueKind.Undefined or JsonValueKind.Null => false,
+            JsonValueKind.Array => a.GetArrayLength() > 0,
+            JsonValueKind.Object => a.EnumerateObject().Any(),
+            JsonValueKind.String => !string.IsNullOrEmpty(a.GetString()),
+            _ => true,
+        };
+
+    internal static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + $"… (+{value.Length - max} chars)";
 }

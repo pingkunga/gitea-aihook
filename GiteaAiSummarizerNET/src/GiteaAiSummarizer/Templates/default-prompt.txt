@@ -3,6 +3,9 @@ Additional instruction: {{ extra_instruction }}
 {{ end }}
 
 ---
+Repository: {{ owner }}/{{ repo }} (owner: {{ owner }}, repo: {{ repo }})
+PR Number: {{ pr_number }}
+PR URL: {{ pr_url }}
 PR Title: {{ pr_title }}
 PR Description: {{ pr_body }}
 Target Branch: {{ base_branch }}

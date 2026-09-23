@@ -5,7 +5,7 @@ description: Detects likely breaking API, config, auth, and deployment changes i
 
 Follow these steps in order:
 
-1. Run `breaking_change_checker.cs` by calling `run_skill_script` with a single-element JSON array containing the full diff text as that one element (for example `["<diff>"]`).
+1. Run `scripts/breaking_change_checker.cs` by calling `run_skill_script` (use that exact `scriptName`) with **no arguments** — the runtime supplies the diff under review automatically. Never paste the diff into the arguments.
 2. Inspect the output for the following risk categories:
    - route or endpoint renames or removals
    - auth or authorization contract changes

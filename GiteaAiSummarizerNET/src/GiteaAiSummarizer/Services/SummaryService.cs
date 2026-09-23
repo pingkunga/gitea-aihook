@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using GiteaAiSummarizer.Models;
 using Scriban;
 using Microsoft.Agents.AI;
@@ -21,6 +23,15 @@ public class SummaryService(
         "default-prompt.txt"
     );
     private readonly string _statusContext = config["Gitea:StatusContext"] ?? "ai/pr-summary";
+    private readonly bool _includeSkillOutputs = config.GetValue("Summary:IncludeSkillOutputs", false);
+
+    /// <summary>Owner/repo the model needs for gitea-tools calls, plus the tool results a run collects.</summary>
+    private sealed record RunContext(string Owner, string Repo, PullRequest Pr)
+    {
+        public List<ToolResult> ToolResults { get; } = new();
+    }
+
+    private sealed record ToolResult(string Stage, string Name, string Arguments, string Result);
 
     public async Task ProcessAsync(GiteaPayload payload, CancellationToken ct = default)
     {
@@ -70,22 +81,17 @@ public class SummaryService(
             var diff = await gitea.GetDiffAsync(owner, repoName, pr.Number, ct);
             var strategy = diffProcessor.DetermineStrategy(diff);
 
-            // One session per PR run, never persisted — keeps the service stateless
-            // across invocations while giving a single run's chunk calls shared context.
-            var session = await agent.CreateSessionAsync(ct);
+            var run = new RunContext(owner, repoName, pr);
 
             string aiSummary = strategy switch
             {
-                DiffStrategy.FullDiff => await SummarizeFullDiffAsync(pr, diff, session, ct),
-                DiffStrategy.Chunked => await SummarizeChunkedAsync(pr, diff, session, ct),
+                DiffStrategy.FullDiff => await SummarizeFullDiffAsync(run, diff, diff, ct),
+                DiffStrategy.Chunked => await SummarizeChunkedAsync(run, diff, ct),
+                // The model only sees the file-level summary, but scripts cost no model tokens, so
+                // they still analyze the raw diff.
                 DiffStrategy.FileLevelSummary
                 or _
-                    => await SummarizeFullDiffAsync(
-                        pr,
-                        diffProcessor.BuildFileLevelSummary(diff),
-                        session,
-                        ct
-                    )
+                    => await SummarizeFullDiffAsync(run, diffProcessor.BuildFileLevelSummary(diff), diff, ct)
             };
 
             // An empty summary is a failure, not a success with placeholder text. Bail before
@@ -114,7 +120,12 @@ public class SummaryService(
 
             sw.Stop();
             var provider = config["AI:ENGINE_TYPE"] ?? "AI";
-            var comment = FormatComment(aiSummary, sw.Elapsed, provider);
+            var comment = FormatComment(
+                aiSummary,
+                sw.Elapsed,
+                provider,
+                _includeSkillOutputs ? run.ToolResults : []
+            );
             await UpsertSummaryCommentAsync(owner, repoName, pr.Number, comment, ct);
 
             await gitea.CreateCommitStatusAsync(
@@ -188,14 +199,14 @@ public class SummaryService(
     }
 
     private async Task<string> SummarizeFullDiffAsync(
-        PullRequest pr,
+        RunContext run,
         string diffContent,
-        AgentSession session,
+        string scriptDiff,
         CancellationToken ct
     )
     {
-        var prompt = await BuildPromptAsync(pr, diffContent);
-        var response = await agent.RunAsync(prompt, session, cancellationToken: ct);
+        var prompt = await BuildPromptAsync(run, diffContent);
+        var response = await RunAgentAsync(run, "full-diff summary", prompt, scriptDiff, ct);
 
         if (string.IsNullOrWhiteSpace(response.Text))
         {
@@ -207,29 +218,26 @@ public class SummaryService(
     }
 
     private async Task<string> SummarizeChunkedAsync(
-        PullRequest pr,
+        RunContext run,
         string diff,
-        AgentSession session,
         CancellationToken ct
     )
     {
         var chunks = diffProcessor.SplitByFile(diff);
-        var prHeader = $"PR Title: {pr.Title}\nPR Description: {pr.Body}\nTarget Branch: {pr.Base.Ref}\nSource Branch: {pr.Head.Ref}";
+        var prHeader = BuildPrHeader(run);
         var fileSummaries = new List<string>();
 
-        for (var i = 0; i < chunks.Count; i++)
+        foreach (var chunk in chunks)
         {
-            var chunk = chunks[i];
-            // Only the first turn needs PR metadata — it stays in the shared session's
-            // history for every later chunk turn.
-            var chunkPrompt = i == 0
-                ? $"{prHeader}\n\nNow summarize this file: {chunk.FileName}\n\n{chunk.Content}"
-                : $"Now summarize this file: {chunk.FileName}\n\n{chunk.Content}";
+            // Each chunk runs in its own session and repeats the (small) PR header. A shared session
+            // made chunk N carry chunks 1..N-1 plus every tool result — the very context load
+            // chunking exists to avoid, and enough to overflow a small-context model.
+            var chunkPrompt = $"{prHeader}\n\nNow summarize this file: {chunk.FileName}\n\n{chunk.Content}";
 
-            var response = await agent.RunAsync(chunkPrompt, session, cancellationToken: ct);
+            var response = await RunAgentAsync(run, $"chunk '{chunk.FileName}'", chunkPrompt, chunk.Content, ct);
 
-            // A turn that ends on tool calls leaves no summary in the session history, so collect
-            // the text here rather than assuming the consolidation turn will find it.
+            // A turn that ends on tool calls yields no text, so collect each chunk's text here
+            // rather than assuming the consolidation turn will find it.
             if (string.IsNullOrWhiteSpace(response.Text))
             {
                 LogEmptyResponse($"chunk '{chunk.FileName}'", response);
@@ -251,15 +259,16 @@ public class SummaryService(
 
         var joined = string.Join("\n\n", fileSummaries);
 
-        // Consolidate in a fresh session: the chunk session carries the whole diff plus every tool
-        // result, which is exactly the context load chunking exists to avoid.
-        var consolidationSession = await agent.CreateSessionAsync(ct);
-        var finalResponse = await agent.RunAsync(
+        // Consolidate in a fresh session seeded only with the per-file summaries. Scripts see the
+        // whole diff here, since the model is now reasoning about the PR as a whole.
+        var finalResponse = await RunAgentAsync(
+            run,
+            "chunked consolidation",
             "Consolidate these file summaries into one PR summary following the required format.\n\n"
                 + prHeader + "\n\n"
                 + joined,
-            consolidationSession,
-            cancellationToken: ct
+            diff,
+            ct
         );
 
         if (!string.IsNullOrWhiteSpace(finalResponse.Text))
@@ -268,8 +277,86 @@ public class SummaryService(
         // Per-file summaries beat nothing when only the consolidation turn came back empty.
         LogEmptyResponse("chunked consolidation", finalResponse);
         return joined;
-
     }
+
+    /// <summary>
+    /// Runs one agent turn in a fresh, never-persisted session, with <paramref name="scriptDiff"/>
+    /// exposed to file-based skill scripts, and records every tool call's result.
+    /// </summary>
+    private async Task<AgentResponse> RunAgentAsync(
+        RunContext run,
+        string stage,
+        string prompt,
+        string scriptDiff,
+        CancellationToken ct
+    )
+    {
+        var session = await agent.CreateSessionAsync(ct);
+        SkillRunContext.CurrentDiff = scriptDiff;
+        try
+        {
+            var response = await agent.RunAsync(prompt, session, cancellationToken: ct);
+            CaptureToolResults(run, stage, response);
+            return response;
+        }
+        finally
+        {
+            SkillRunContext.CurrentDiff = null;
+        }
+    }
+
+    /// <summary>
+    /// Pairs each function call in the run with its result (by call id) and logs it — covering
+    /// file scripts (<c>run_skill_script</c>), <c>gitea-tools</c> scripts, <c>load_skill</c> and
+    /// <c>read_skill_resource</c> — so what a skill actually returned is visible after the fact.
+    /// </summary>
+    private void CaptureToolResults(RunContext run, string stage, AgentResponse response)
+    {
+        var contents = response.Messages.SelectMany(m => m.Contents).ToList();
+        var calls = contents
+            .OfType<FunctionCallContent>()
+            .GroupBy(c => c.CallId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var result in contents.OfType<FunctionResultContent>())
+        {
+            calls.TryGetValue(result.CallId, out var call);
+            var name = call?.Name ?? "(unknown)";
+            var args = call?.Arguments is { Count: > 0 } a
+                ? JsonSerializer.Serialize(a)
+                : "";
+            var text = result.Exception is { } ex
+                ? $"Error: {ex.Message}"
+                : result.Result switch
+                {
+                    null => "",
+                    string s => s,
+                    JsonElement e when e.ValueKind == JsonValueKind.String => e.GetString() ?? "",
+                    var o => JsonSerializer.Serialize(o)
+                };
+
+            run.ToolResults.Add(new ToolResult(stage, name, args, text));
+            logger.LogInformation(
+                "Tool Result at {Stage}: {ToolName}({Arguments}) → {Length} chars: {Result}",
+                stage,
+                name,
+                SkillScriptRunner.Truncate(args, 300),
+                text.Length,
+                SkillScriptRunner.Truncate(text, 2048)
+            );
+        }
+    }
+
+    private static string BuildPrHeader(RunContext run) =>
+        $"""
+        Repository: {run.Owner}/{run.Repo} (owner: {run.Owner}, repo: {run.Repo})
+        PR Number: {run.Pr.Number}
+        PR URL: {run.Pr.HtmlUrl}
+        PR Title: {run.Pr.Title}
+        PR Description: {run.Pr.Body}
+        Target Branch: {run.Pr.Base.Ref}
+        Source Branch: {run.Pr.Head.Ref}
+        """;
 
     /// <summary>
     /// Records what a run actually returned when it produced no text, so an empty summary can be
@@ -296,17 +383,22 @@ public class SummaryService(
     }
 
     private async Task<string> BuildPromptAsync(
-        PullRequest pr,
+        RunContext run,
         string diffContent,
         string? extraInstruction = null
     )
     {
         var templateText = await LoadTemplateAsync();
         var template = Template.Parse(templateText);
+        var pr = run.Pr;
 
         return await template.RenderAsync(
             new
             {
+                owner = run.Owner,
+                repo = run.Repo,
+                pr_number = pr.Number,
+                pr_url = pr.HtmlUrl,
                 pr_title = pr.Title,
                 pr_body = pr.Body ?? string.Empty,
                 base_branch = pr.Base.Ref,
@@ -324,17 +416,40 @@ public class SummaryService(
         return DefaultPromptTemplate;
     }
 
-    private static string FormatComment(string summary, TimeSpan elapsed, string provider) =>
+    private static string FormatComment(
+        string summary,
+        TimeSpan elapsed,
+        string provider,
+        IReadOnlyList<ToolResult> toolResults
+    ) =>
         $"""
         {SummaryCommentMarker}
 
         🤖 **AI Summary** (powered by {provider})
 
         {summary}
-
+        {FormatToolResults(toolResults)}
         ---
         <sub>Generated by Gitea AI Summarizer • took {elapsed.TotalSeconds:0.0}s</sub>
         """;
+
+    private static string FormatToolResults(IReadOnlyList<ToolResult> toolResults)
+    {
+        if (toolResults.Count == 0)
+            return "";
+
+        var sb = new StringBuilder();
+        sb.AppendLine().AppendLine("<details><summary>🛠 Skill outputs</summary>").AppendLine();
+        foreach (var r in toolResults)
+        {
+            sb.AppendLine($"**{r.Name}** <sub>({r.Stage})</sub>");
+            if (r.Arguments.Length > 0)
+                sb.AppendLine($"<sub>args: `{SkillScriptRunner.Truncate(r.Arguments, 200).Replace("`", "'")}`</sub>");
+            sb.AppendLine().AppendLine("```text").AppendLine(SkillScriptRunner.Truncate(r.Result, 4000).Replace("```", "'''")).AppendLine("```").AppendLine();
+        }
+        sb.AppendLine("</details>");
+        return sb.ToString();
+    }
 
     private const string DefaultPromptTemplate = """
         {{ if extra_instruction != "" }}
@@ -342,6 +457,9 @@ public class SummaryService(
         {{ end }}
 
         ---
+        Repository: {{ owner }}/{{ repo }} (owner: {{ owner }}, repo: {{ repo }})
+        PR Number: {{ pr_number }}
+        PR URL: {{ pr_url }}
         PR Title: {{ pr_title }}
         PR Description: {{ pr_body }}
         Target Branch: {{ base_branch }}
